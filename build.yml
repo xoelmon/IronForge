@@ -1,0 +1,30 @@
+name: Compilar IronForge (Windows)
+
+on:
+  push:
+  workflow_dispatch:   # permite lanzarlo a mano desde la pestaña Actions
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Compilar
+        run: cmake --build build --config Release --target IronForge_VST3 IronForge_Standalone --parallel
+
+      - name: Preparar carpeta de salida
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item -Recurse "build/IronForge_artefacts/Release/VST3/IronForge.vst3" "dist/IronForge.vst3"
+          Copy-Item "build/IronForge_artefacts/Release/Standalone/IronForge.exe" "dist/IronForge.exe"
+
+      - name: Subir resultado
+        uses: actions/upload-artifact@v4
+        with:
+          name: IronForge-Windows
+          path: dist
