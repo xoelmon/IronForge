@@ -35,7 +35,7 @@ static NormalisableRange<float> rangeWithCentre (float lo, float hi, float centr
     return r;
 }
 
-AudioProcessorValueTreeState::ParameterLayout IronForgeProcessor::createParameterLayout()
+AudioProcessorValueTreeState::ParameterLayout IronHitsProcessor::createParameterLayout()
 {
     AudioProcessorValueTreeState::ParameterLayout layout;
 
@@ -92,29 +92,30 @@ AudioProcessorValueTreeState::ParameterLayout IronForgeProcessor::createParamete
 }
 
 //==============================================================================
-IronForgeProcessor::IronForgeProcessor()
+IronHitsProcessor::IronHitsProcessor()
     : AudioProcessor (BusesProperties().withInput  ("Input",  AudioChannelSet::stereo(), true)
                                        .withOutput ("Output", AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "IRONFORGE", createParameterLayout())
+      apvts (*this, nullptr, "IRONHITS", createParameterLayout())
 {
 }
 
-bool IronForgeProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool IronHitsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     return layouts.getMainInputChannelSet()  == AudioChannelSet::stereo()
         && layouts.getMainOutputChannelSet() == AudioChannelSet::stereo();
 }
 
-void IronForgeProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void IronHitsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     eq.prepare (sampleRate, samplesPerBlock);
     comp.prepare (sampleRate);
     limiter.prepare (sampleRate);
+    loudness.prepare (sampleRate);
     setLatencySamples (limiter.getLatencySamples());    // el DAW compensa la latencia del look-ahead
     scopeFifo.reset();
 }
 
-void IronForgeProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
+void IronHitsProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
 {
     ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -155,6 +156,8 @@ void IronForgeProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     limiter.update (lp);
     storeMax (limGrDb, limiter.process (buffer));
 
+    loudness.process (buffer);
+
     storeMax (outPeak[0], buffer.getMagnitude (0, 0, n));
     storeMax (outPeak[1], buffer.getMagnitude (1, 0, n));
 
@@ -173,19 +176,19 @@ void IronForgeProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
 }
 
 //==============================================================================
-AudioProcessorEditor* IronForgeProcessor::createEditor() { return new IronForgeEditor (*this); }
+AudioProcessorEditor* IronHitsProcessor::createEditor() { return new IronHitsEditor (*this); }
 
-void IronForgeProcessor::getStateInformation (MemoryBlock& destData)
+void IronHitsProcessor::getStateInformation (MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
         copyXmlToBinary (*xml, destData);
 }
 
-void IronForgeProcessor::setStateInformation (const void* data, int sizeInBytes)
+void IronHitsProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
             apvts.replaceState (ValueTree::fromXml (*xml));
 }
 
-AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new IronForgeProcessor(); }
+AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new IronHitsProcessor(); }

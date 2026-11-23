@@ -1,7 +1,10 @@
 #pragma once
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cmath>
 #include <complex>
 #include <vector>
@@ -377,6 +380,156 @@ private:
     int64_t counter = 0;
     double sum = 0.0;
     juce::SmoothedValue<float> drive;
+};
+
+
+//==============================================================================
+//  MEDIDOR DE SONORIDAD ITU-R BS.1770-4 / EBU R128 (LUFS) + RMS
+//    Momentary (400 ms), Short-term (3 s), Integrated (con puertas -70 LUFS y -10 LU)
+//==============================================================================
+class LoudnessMeter
+{
+public:
+    std::atomic<float> momentary { -120.f }, shortTerm { -120.f }, integrated { -120.f }, peakDb { -120.f };
+    std::atomic<float> rmsDb[2] { -120.f, -120.f };
+
+    void requestReset() { resetFlag.store (true); }      // lo llama la interfaz; lo ejecuta el hilo de audio
+
+    void prepare (double sr)
+    {
+        len400 = std::max (1, (int) std::lround (0.4 * sr));
+        len3s  = std::max (len400 + 1, (int) std::lround (3.0 * sr));
+        len300 = std::max (1, (int) std::lround (0.3 * sr));
+        hop    = std::max (1, (int) std::lround (0.1 * sr));
+        ring.assign ((size_t) len3s, 0.f);
+        for (auto& r : rmsRing) r.assign ((size_t) len300, 0.f);
+
+        // Filtro K, etapa 1: shelf agudo (~+4 dB). Coeficientes válidos para cualquier frecuencia de muestreo.
+        {
+            const double f0 = 1681.974450955533, G = 3.999843853973347, Q = 0.7071752369554196;
+            const double K = std::tan (juce::MathConstants<double>::pi * f0 / sr);
+            const double Vh = std::pow (10.0, G / 20.0), Vb = std::pow (Vh, 0.4996667741545416);
+            const double a0 = 1.0 + K / Q + K * K;
+            shelf.c.b0 = (Vh + Vb * K / Q + K * K) / a0;
+            shelf.c.b1 = 2.0 * (K * K - Vh) / a0;
+            shelf.c.b2 = (Vh - Vb * K / Q + K * K) / a0;
+            shelf.c.a1 = 2.0 * (K * K - 1.0) / a0;
+            shelf.c.a2 = (1.0 - K / Q + K * K) / a0;
+        }
+        // Etapa 2: paso-alto "RLB" (~38 Hz)
+        {
+            const double f0 = 38.13547087602444, Q = 0.5003270373238773;
+            const double K = std::tan (juce::MathConstants<double>::pi * f0 / sr);
+            const double a0 = 1.0 + K / Q + K * K;
+            highpass.c.b0 = 1.0;  highpass.c.b1 = -2.0;  highpass.c.b2 = 1.0;
+            highpass.c.a1 = 2.0 * (K * K - 1.0) / a0;
+            highpass.c.a2 = (1.0 - K / Q + K * K) / a0;
+        }
+        shelf.reset();  highpass.reset();
+
+        for (int i = 0; i < kBins; ++i)
+            binEnergy[(size_t) i] = std::pow (10.0, (binLoudness (i) + 0.691) / 10.0);
+
+        ringPos = rmsPos = hopCounter = 0;
+        samplesSeen = 0;
+        sum400 = sum3 = rmsSum[0] = rmsSum[1] = 0.0;
+        resetIntegrated();
+    }
+
+    void process (const juce::AudioBuffer<float>& buf)
+    {
+        if (resetFlag.exchange (false))
+            resetIntegrated();
+
+        const int n = buf.getNumSamples();
+        const float* in[2] = { buf.getReadPointer (0), buf.getReadPointer (1) };
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float xl = in[0][i], xr = in[1][i];
+            peakAbs = std::max ({ peakAbs, std::abs (xl), std::abs (xr) });
+
+            // RMS sin ponderar, ventana de 300 ms
+            const float x2[2] = { xl * xl, xr * xr };
+            for (int c = 0; c < 2; ++c)
+            {
+                auto& r = rmsRing[(size_t) c];
+                rmsSum[c] += (double) x2[c] - (double) r[(size_t) rmsPos];
+                r[(size_t) rmsPos] = x2[c];
+            }
+            rmsPos = (rmsPos + 1) % len300;
+
+            // LUFS: ponderación K y energía de ambos canales
+            const double kl = highpass.process (0, shelf.process (0, xl));
+            const double kr = highpass.process (1, shelf.process (1, xr));
+            const float z = (float) (kl * kl + kr * kr);
+            const int old400 = (ringPos - len400 + len3s) % len3s;
+            sum400 += (double) z - (double) ring[(size_t) old400];
+            sum3   += (double) z - (double) ring[(size_t) ringPos];
+            ring[(size_t) ringPos] = z;
+            ringPos = (ringPos + 1) % len3s;
+
+            ++samplesSeen;
+            if (++hopCounter >= hop)                        // un bloque de 400 ms cada 100 ms (75 % de solape)
+            {
+                hopCounter = 0;
+                if (samplesSeen >= len400)
+                    addBlock (sum400 / (double) len400);
+            }
+        }
+
+        auto toLufs = [] (double ms) { return (float) std::max (-120.0, -0.691 + 10.0 * std::log10 (std::max (ms, 1.0e-12))); };
+        momentary.store (toLufs (sum400 / (double) len400));
+        shortTerm.store (toLufs (sum3 / (double) len3s));
+        for (int c = 0; c < 2; ++c)
+            rmsDb[c].store ((float) std::max (-120.0, 10.0 * std::log10 (std::max (rmsSum[c] / (double) len300, 1.0e-12))));
+        peakDb.store (juce::Decibels::gainToDecibels (peakAbs, -120.f));
+    }
+
+private:
+    static constexpr int kBins = 760;                        // de -70 a +6 LUFS en pasos de 0.1 LU
+    static double binLoudness (int i) { return -70.0 + ((double) i + 0.5) * 0.1; }
+
+    void resetIntegrated()
+    {
+        hist.fill (0);
+        samplesSeen = 0;                                     // el integrado solo cuenta bloques posteriores al reset
+        integrated.store (-120.f);
+        peakAbs = 0.f;
+        peakDb.store (-120.f);
+    }
+
+    void addBlock (double meanSquare)
+    {
+        const double loud = -0.691 + 10.0 * std::log10 (std::max (meanSquare, 1.0e-12));
+        if (loud < -70.0) return;                            // puerta absoluta
+        ++hist[(size_t) juce::jlimit (0, kBins - 1, (int) ((loud + 70.0) * 10.0))];
+
+        double sumAll = 0.0;  uint64_t cntAll = 0;
+        for (int i = 0; i < kBins; ++i) { sumAll += (double) hist[(size_t) i] * binEnergy[(size_t) i]; cntAll += hist[(size_t) i]; }
+        const double relGate = -0.691 + 10.0 * std::log10 (sumAll / (double) cntAll) - 10.0;   // puerta relativa
+
+        double sumRel = 0.0;  uint64_t cntRel = 0;
+        for (int i = 0; i < kBins; ++i)
+            if (hist[(size_t) i] > 0 && binLoudness (i) >= relGate)
+            {
+                sumRel += (double) hist[(size_t) i] * binEnergy[(size_t) i];
+                cntRel += hist[(size_t) i];
+            }
+        integrated.store (cntRel > 0 ? (float) (-0.691 + 10.0 * std::log10 (sumRel / (double) cntRel)) : -120.f);
+    }
+
+    Biquad shelf, highpass;
+    std::vector<float> ring;
+    std::array<std::vector<float>, 2> rmsRing;
+    std::array<uint32_t, kBins> hist {};
+    std::array<double, kBins> binEnergy {};
+    int len400 = 19200, len3s = 144000, len300 = 14400, hop = 4800;
+    int ringPos = 0, rmsPos = 0, hopCounter = 0;
+    int64_t samplesSeen = 0;
+    double sum400 = 0.0, sum3 = 0.0, rmsSum[2] { 0.0, 0.0 };
+    float peakAbs = 0.f;
+    std::atomic<bool> resetFlag { false };
 };
 
 } // namespace ifg

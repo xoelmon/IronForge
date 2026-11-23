@@ -4,11 +4,11 @@
 #include "DSP.h"
 #include "Params.h"
 
-class IronForgeProcessor : public juce::AudioProcessor
+class IronHitsProcessor : public juce::AudioProcessor
 {
 public:
-    IronForgeProcessor();
-    ~IronForgeProcessor() override = default;
+    IronHitsProcessor();
+    ~IronHitsProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -19,7 +19,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "IronForge"; }
+    const juce::String getName() const override { return "IRONHITS"; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -45,6 +45,9 @@ public:
     std::atomic<float> compGrDb   { 0.f };        // dB de reducción (positivo)
     std::atomic<float> limGrDb    { 0.f };        // dB de reducción (positivo)
 
+    // --- Sonoridad de la salida (LUFS / RMS) ---
+    ifg::LoudnessMeter loudness;
+
     // --- Cola de audio para el analizador de espectro del EQ ---
     juce::AbstractFifo scopeFifo { 16384 };
     std::array<float, 16384> scopeData {};
@@ -63,5 +66,5 @@ private:
     float get (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
     bool  on  (const char* id) const { return get (id) > 0.5f; }
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IronForgeProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IronHitsProcessor)
 };

@@ -118,6 +118,8 @@ public:
         setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
         setColour (juce::Slider::textBoxBackgroundColourId, juce::Colours::transparentBlack);
         setColour (juce::Label::textColourId, col::text);
+        setColour (juce::TextButton::textColourOffId, col::bone);
+        setColour (juce::TextButton::textColourOnId, col::bone);
         setColour (juce::TextEditor::backgroundColourId, juce::Colour (0xff0e0e10));
         setColour (juce::TextEditor::textColourId, col::bone);
         setColour (juce::TextEditor::outlineColourId, col::blood);
@@ -125,6 +127,21 @@ public:
         setColour (juce::TextEditor::highlightColourId, col::blood);
         setColour (juce::CaretComponent::caretColourId, col::glow);
     }
+
+    void drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down) override
+    {
+        using namespace juce;
+        const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
+        g.setGradientFill (ColourGradient (down ? Colour (0xff4a1414) : (over ? Colour (0xff3d3f46) : Colour (0xff2e3035)), 0.f, r.getY(),
+                                           Colour (0xff131315), 0.f, r.getBottom(), false));
+        g.fillRoundedRectangle (r, 4.f);
+        g.setColour (Colour (0xff050506));
+        g.drawRoundedRectangle (r, 4.f, 1.5f);
+        g.setColour (over || down ? col::blood : Colour (0x30ffffff));
+        g.drawRoundedRectangle (r.reduced (1.5f), 3.f, 1.f);
+    }
+
+    juce::Font getTextButtonFont (juce::TextButton&, int) override { return gfx::uiFont (13.f); }
 
     juce::Font getLabelFont (juce::Label& l) override
     {
@@ -290,22 +307,25 @@ public:
         setInterceptsMouseClicks (false, false);
     }
 
-    // Para medidores de nivel: valores lineales. Para GR: dB positivos.
+    // Medidores de nivel: valores lineales. Para GR: dB positivos.
     void update (float v0, float v1, float dt)
     {
         const float in[2] = { v0, v1 };
         for (int c = 0; c < channels; ++c)
-        {
-            float v = gr ? in[c] : juce::Decibels::gainToDecibels (in[c], -range);   // GR: 0..range | nivel: -range..0
-            if (! gr) v += range;                                                    // 0..range
-            v = juce::jlimit (0.f, range, v);
-
-            disp[(size_t) c] = std::max (v, disp[(size_t) c] - (gr ? 70.f : 40.f) * dt);
-            if (v >= peak[(size_t) c]) { peak[(size_t) c] = v; hold[(size_t) c] = 0.9f; }
-            else if ((hold[(size_t) c] -= dt) <= 0.f) peak[(size_t) c] = std::max (0.f, peak[(size_t) c] - 25.f * dt);
-        }
+            step (c, gr ? in[c] : juce::Decibels::gainToDecibels (in[c], -range) + range, dt);
         repaint();
     }
+
+    // Medidores directamente en dB (LUFS / RMS): -range .. 0
+    void updateDb (float db0, float db1, float dt)
+    {
+        const float in[2] = { db0, db1 };
+        for (int c = 0; c < channels; ++c)
+            step (c, in[c] + range, dt);
+        repaint();
+    }
+
+    void setFallRate (float dbPerSecond) { fall = dbPerSecond; }
 
     void paint (juce::Graphics& g) override
     {
@@ -340,9 +360,19 @@ public:
     }
 
 private:
+    void step (int c, float v, float dt)
+    {
+        const auto i = (size_t) c;
+        v = juce::jlimit (0.f, range, v);
+        disp[i] = std::max (v, disp[i] - (fall > 0.f ? fall : (gr ? 70.f : 40.f)) * dt);
+        if (v >= peak[i]) { peak[i] = v; hold[i] = 0.9f; }
+        else if ((hold[i] -= dt) <= 0.f) peak[i] = std::max (0.f, peak[i] - 25.f * dt);
+    }
+
     int channels;
     bool gr;
     float range;
+    float fall = 0.f;
     std::array<float, 2> disp, peak, hold;
 };
 
@@ -487,7 +517,7 @@ private:
 class EqDisplay : public juce::Component
 {
 public:
-    explicit EqDisplay (IronForgeProcessor& p)
+    explicit EqDisplay (IronHitsProcessor& p)
         : proc (p), apvts (p.apvts), fft (fftOrder),
           window ((size_t) fftSize, juce::dsp::WindowingFunction<float>::hann)
     {
@@ -649,7 +679,7 @@ public:
     //-------------------------------------------------------------- ratón
     void mouseMove (const juce::MouseEvent& e) override
     {
-        const int h = hitTest (e.position);
+        const int h = nodeAt (e.position);
         if (h != hover) { hover = h; repaint(); }
         setMouseCursor (h >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
     }
@@ -657,7 +687,7 @@ public:
 
     void mouseDown (const juce::MouseEvent& e) override
     {
-        dragging = hitTest (e.position);
+        dragging = nodeAt (e.position);
         if (dragging >= 0)
         {
             gesture (ids::bandFreq[dragging], true);
@@ -689,7 +719,7 @@ public:
 
     void mouseDoubleClick (const juce::MouseEvent& e) override
     {
-        const int h = hitTest (e.position);
+        const int h = nodeAt (e.position);
         if (h < 0) return;
         gesture (ids::bandGain[h], true);
         setParam (ids::bandGain[h], 0.f);
@@ -698,7 +728,7 @@ public:
 
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
     {
-        const int h = hitTest (e.position);
+        const int h = nodeAt (e.position);
         if (h < 0) return;
         gesture (ids::bandQ[h], true);
         setParam (ids::bandQ[h], val (ids::bandQ[h]) * std::exp (w.deltaY * 1.2f));
@@ -739,7 +769,7 @@ private:
         return { freqToX (val (ids::bandFreq[i]), r), dbToY (val (ids::bandGain[i]), r) };
     }
 
-    int hitTest (juce::Point<float> p) const
+    int nodeAt (juce::Point<float> p) const
     {
         const auto r = plotArea();
         int best = -1;
@@ -754,7 +784,7 @@ private:
 
     void pushSample (float s) { rolling[(size_t) wp] = s; wp = (wp + 1) % fftSize; }
 
-    IronForgeProcessor& proc;
+    IronHitsProcessor& proc;
     juce::AudioProcessorValueTreeState& apvts;
     juce::dsp::FFT fft;
     juce::dsp::WindowingFunction<float> window;

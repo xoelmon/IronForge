@@ -6,7 +6,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "")
 
-project(IronForge VERSION 1.0.0)
+project(IRONHITS VERSION 1.1.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -17,30 +17,31 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW    ON)
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_plugin(IronForge
-    COMPANY_NAME            "IronForge Audio"
-    PLUGIN_MANUFACTURER_CODE Ifrg
-    PLUGIN_CODE             Ifg1
+juce_add_plugin(IRONHITS
+    COMPANY_NAME            "IRONHITS Audio"
+    PLUGIN_MANUFACTURER_CODE Ihts
+    PLUGIN_CODE             Iht1
     FORMATS                 VST3 Standalone
-    PRODUCT_NAME            "IronForge"
+    PRODUCT_NAME            "IRONHITS"
     VST3_CATEGORIES         Fx Dynamics EQ
     IS_SYNTH                FALSE
     NEEDS_MIDI_INPUT        FALSE
     NEEDS_MIDI_OUTPUT       FALSE
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
-target_sources(IronForge PRIVATE
+# Los archivos de código están sueltos en esta misma carpeta
+target_sources(IRONHITS PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp)
 
-target_compile_definitions(IronForge PUBLIC
+target_compile_definitions(IRONHITS PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
-target_compile_options(IronForge PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_compile_options(IRONHITS PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
-target_link_libraries(IronForge
+target_link_libraries(IRONHITS
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp

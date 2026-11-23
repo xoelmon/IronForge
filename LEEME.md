@@ -1,45 +1,25 @@
-# IronForge — EQ + Compresor + Limitador (VST3)
+# IRONHITS — EQ + Compresor + Limitador + medidor LUFS/RMS (VST3)
 
-Plugin VST3 para FL Studio / Cubase (Windows). Cadena fija: **EQ → Compresor → Limitador**.
+Cadena fija: **EQ -> Compresor -> Limitador**, y a la derecha un medidor de la salida.
 
-* **EQ:** paso-alto 24 dB/oct + 4 bandas (shelf grave, 2 campanas, shelf agudo). Nodos arrastrables en la pantalla,
-  rueda del ratón sobre un nodo = Q, doble clic = ganancia a 0. Analizador de espectro de la salida.
-* **Compresor:** threshold, ratio, knee, attack, release, makeup, mix (compresión paralela).
+* **EQ:** paso-alto 24 dB/oct + 4 bandas (shelf grave, 2 campanas, shelf agudo). Nodos arrastrables,
+  rueda sobre un nodo = Q, doble clic = ganancia a 0. Analizador de espectro.
+* **Compresor:** threshold, ratio, knee, attack, release, makeup, mix paralelo.
 * **Limitador:** brickwall con lookahead de 5 ms (latencia que el DAW compensa solo), gain, ceiling, release.
-* Cada módulo tiene su botón ON/OFF (el LED rojo). Doble clic en un knob = valor por defecto;
-  doble clic en el número de debajo = escribir un valor.
+* **Medidor de salida (columna derecha):**
+  * LUFS (ITU-R BS.1770 / EBU R128): Momentary (400 ms), Short-term (3 s) e Integrated (con puertas -70 LUFS y -10 LU).
+  * RMS izquierdo y derecho (ventana de 300 ms, sin ponderar: un seno a -20 dBFS de pico marca -23 dB).
+  * Pico de muestra (dBFS). El botón RESET reinicia el Integrated y el pico (úsalo al empezar a reproducir el tema).
+  * Mide la señal ya procesada (después del limitador).
 
-## Opción A (la fácil): que GitHub te lo compile
+## Compilar con GitHub
 
-1. Crea una cuenta gratis en https://github.com y un repositorio nuevo (botón **New**, ponle de nombre `IronForge`).
-2. En el repositorio: **Add file → Upload files** y arrastra TODO el contenido de esta carpeta
-   (`Source`, `CMakeLists.txt`, `.github`...).
-   *Si tu sistema no te deja arrastrar la carpeta oculta `.github`:* en GitHub pulsa **Add file → Create new file**,
-   escribe como nombre `.github/workflows/build.yml` y pega dentro el contenido del archivo `build.yml` de este zip.
-3. Ve a la pestaña **Actions**. Verás una ejecución "Compilar IronForge (Windows)" en marcha (tarda unos 10 minutos).
-   Si no arranca, pulsa en ella → **Run workflow**.
-4. Cuando salga el tick verde, entra en la ejecución y abajo, en **Artifacts**, descarga `IronForge-Windows`.
-5. Descomprime. Dentro hay:
-   * `IronForge.vst3` (es una **carpeta**; cópiala entera) → pégala en `C:\Program Files\Common Files\VST3\`
-   * `IronForge.exe` → versión independiente para probarlo sin DAW.
-6. **FL Studio:** Options → Manage plugins → *Find installed plugins* (o *Rescan*). Aparecerá en la lista de efectos.
-   **Cubase:** Studio → VST Plug-in Manager → Actualizar (o reinicia Cubase). Aparece en Dynamics / EQ.
-
-## Opción B: compilar en tu PC
-
-Necesitas Visual Studio 2022 Community (con la carga de trabajo "Desarrollo para el escritorio con C++"), CMake y Git.
-
-    cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-    cmake --build build --config Release --target IronForge_VST3
-
-El plugin queda en `build\IronForge_artefacts\Release\VST3\IronForge.vst3`.
+Sube los archivos de esta carpeta a la raíz de tu repositorio (sustituyen a los anteriores) y GitHub compila solo.
+El resultado aparece en Actions -> última ejecución -> Artifacts -> IRONHITS-Windows.
+Copia la carpeta `IRONHITS.vst3` a `C:\Program Files\Common Files\VST3\`.
+**Borra de esa carpeta el `IronForge.vst3` antiguo** para que no salgan los dos.
 
 ## Notas
-
-* El plugin no está firmado digitalmente: Windows puede avisar con SmartScreen al abrir `IronForge.exe`. Es normal.
-* Si algún día el DAW dice que falta `VCRUNTIME140.dll`, instala el "Visual C++ Redistributable" de Microsoft.
-* Ceiling del limitador: por defecto -0.3 dB. No hace oversampling, así que no es un limitador de *true-peak*;
-  si necesitas margen para mp3/streaming, pon el ceiling en -1.0 dB.
-* El ratio, ataque, etc. se pueden automatizar desde el DAW (todos los controles son parámetros).
-* Licencia: el código del plugin es tuyo, pero JUCE es AGPLv3 o de pago. Para uso personal da igual;
-  si vas a **vender o distribuir sin publicar el código**, necesitas una licencia comercial de JUCE.
+* Sin firma digital: SmartScreen puede avisar al abrir `IRONHITS.exe`.
+* No hay oversampling: no es un limitador true-peak. Para streaming/mp3 pon el ceiling en -1.0 dB.
+* Licencia: JUCE es AGPLv3 o de pago; si vendes el plugin sin publicar el código necesitas licencia comercial.
