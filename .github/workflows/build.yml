@@ -13,7 +13,7 @@ jobs:
       - name: Comprobar que se han subido todos los archivos
         shell: pwsh
         run: |
-          $needed = "CMakeLists.txt","Source/PluginProcessor.cpp","Source/PluginProcessor.h","Source/PluginEditor.cpp","Source/PluginEditor.h","Source/DSP.h","Source/UI.h","Source/Params.h"
+          $needed = "CMakeLists.txt","PluginProcessor.cpp","PluginProcessor.h","PluginEditor.cpp","PluginEditor.h","DSP.h","UI.h","Params.h"
           $missing = $needed | Where-Object { -not (Test-Path $_) }
           if ($missing) {
             Write-Host "FALTAN ARCHIVOS EN EL REPOSITORIO: $($missing -join ', ')"
