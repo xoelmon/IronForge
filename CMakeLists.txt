@@ -30,8 +30,8 @@ juce_add_plugin(IronForge
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 target_sources(IronForge PRIVATE
-    Source/PluginProcessor.cpp
-    Source/PluginEditor.cpp)
+    PluginProcessor.cpp
+    PluginEditor.cpp)
 
 target_compile_definitions(IronForge PUBLIC
     JUCE_WEB_BROWSER=0
