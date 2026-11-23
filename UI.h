@@ -517,7 +517,7 @@ private:
 class EqDisplay : public juce::Component
 {
 public:
-    explicit EqDisplay (IronHitsProcessor& p)
+    explicit EqDisplay (LargartixaProcessor& p)
         : proc (p), apvts (p.apvts), fft (fftOrder),
           window ((size_t) fftSize, juce::dsp::WindowingFunction<float>::hann)
     {
@@ -784,7 +784,7 @@ private:
 
     void pushSample (float s) { rolling[(size_t) wp] = s; wp = (wp + 1) % fftSize; }
 
-    IronHitsProcessor& proc;
+    LargartixaProcessor& proc;
     juce::AudioProcessorValueTreeState& apvts;
     juce::dsp::FFT fft;
     juce::dsp::WindowingFunction<float> window;

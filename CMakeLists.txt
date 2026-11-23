@@ -6,7 +6,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "")
 set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "")
 
-project(IRONHITS VERSION 1.1.0)
+project(LARGARTIXA VERSION 1.2.0)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -17,12 +17,12 @@ FetchContent_Declare(JUCE
     GIT_SHALLOW    ON)
 FetchContent_MakeAvailable(JUCE)
 
-juce_add_plugin(IRONHITS
-    COMPANY_NAME            "IRONHITS Audio"
-    PLUGIN_MANUFACTURER_CODE Ihts
-    PLUGIN_CODE             Iht1
+juce_add_plugin(LARGARTIXA
+    COMPANY_NAME            "LARGARTIXA SOUNDLAB"
+    PLUGIN_MANUFACTURER_CODE Lgsl
+    PLUGIN_CODE             Lsl1
     FORMATS                 VST3 Standalone
-    PRODUCT_NAME            "IRONHITS"
+    PRODUCT_NAME            "LARGARTIXA SOUNDLAB"
     VST3_CATEGORIES         Fx Dynamics EQ
     IS_SYNTH                FALSE
     NEEDS_MIDI_INPUT        FALSE
@@ -30,18 +30,18 @@ juce_add_plugin(IRONHITS
     COPY_PLUGIN_AFTER_BUILD FALSE)
 
 # Los archivos de código están sueltos en esta misma carpeta
-target_sources(IRONHITS PRIVATE
+target_sources(LARGARTIXA PRIVATE
     PluginProcessor.cpp
     PluginEditor.cpp)
 
-target_compile_definitions(IRONHITS PUBLIC
+target_compile_definitions(LARGARTIXA PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0)
 
-target_compile_options(IRONHITS PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_compile_options(LARGARTIXA PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
-target_link_libraries(IRONHITS
+target_link_libraries(LARGARTIXA
     PRIVATE
         juce::juce_audio_utils
         juce::juce_dsp

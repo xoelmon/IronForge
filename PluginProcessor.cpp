@@ -35,7 +35,7 @@ static NormalisableRange<float> rangeWithCentre (float lo, float hi, float centr
     return r;
 }
 
-AudioProcessorValueTreeState::ParameterLayout IronHitsProcessor::createParameterLayout()
+AudioProcessorValueTreeState::ParameterLayout LargartixaProcessor::createParameterLayout()
 {
     AudioProcessorValueTreeState::ParameterLayout layout;
 
@@ -92,20 +92,20 @@ AudioProcessorValueTreeState::ParameterLayout IronHitsProcessor::createParameter
 }
 
 //==============================================================================
-IronHitsProcessor::IronHitsProcessor()
+LargartixaProcessor::LargartixaProcessor()
     : AudioProcessor (BusesProperties().withInput  ("Input",  AudioChannelSet::stereo(), true)
                                        .withOutput ("Output", AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "IRONHITS", createParameterLayout())
+      apvts (*this, nullptr, "LARGARTIXA", createParameterLayout())
 {
 }
 
-bool IronHitsProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool LargartixaProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     return layouts.getMainInputChannelSet()  == AudioChannelSet::stereo()
         && layouts.getMainOutputChannelSet() == AudioChannelSet::stereo();
 }
 
-void IronHitsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void LargartixaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     eq.prepare (sampleRate, samplesPerBlock);
     comp.prepare (sampleRate);
@@ -115,7 +115,7 @@ void IronHitsProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     scopeFifo.reset();
 }
 
-void IronHitsProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
+void LargartixaProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
 {
     ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -176,19 +176,19 @@ void IronHitsProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
 }
 
 //==============================================================================
-AudioProcessorEditor* IronHitsProcessor::createEditor() { return new IronHitsEditor (*this); }
+AudioProcessorEditor* LargartixaProcessor::createEditor() { return new LargartixaEditor (*this); }
 
-void IronHitsProcessor::getStateInformation (MemoryBlock& destData)
+void LargartixaProcessor::getStateInformation (MemoryBlock& destData)
 {
     if (auto xml = apvts.copyState().createXml())
         copyXmlToBinary (*xml, destData);
 }
 
-void IronHitsProcessor::setStateInformation (const void* data, int sizeInBytes)
+void LargartixaProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     if (auto xml = getXmlFromBinary (data, sizeInBytes))
         if (xml->hasTagName (apvts.state.getType()))
             apvts.replaceState (ValueTree::fromXml (*xml));
 }
 
-AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new IronHitsProcessor(); }
+AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new LargartixaProcessor(); }

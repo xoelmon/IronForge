@@ -11,7 +11,7 @@ class MainPanel : public Component, private Timer
 public:
     static constexpr int W = 1290, H = 680;
 
-    explicit MainPanel (IronHitsProcessor& p)
+    explicit MainPanel (LargartixaProcessor& p)
         : proc (p), eqDisplay (p), compCurve (p.apvts),
           compHistory (24.f), limHistory (12.f),
           inMeter (2, false, 48.f), outMeter (2, false, 48.f),
@@ -234,15 +234,15 @@ private:
         g.fillRect (0.f, y0 - 4.f, (float) W, 1.5f);
 
         // logotipo
-        const Rectangle<int> tb (28, 4, 420, 50);
-        g.setFont (gfx::titleFont (44.f));
+        const Rectangle<int> tb (28, 4, 760, 50);
+        g.setFont (gfx::titleFont (40.f));
         g.setColour (col::blood.withAlpha (0.28f));
         for (auto o : { Point<int> (-2, 0), Point<int> (2, 0), Point<int> (0, -2), Point<int> (0, 2) })
-            g.drawText ("IRONHITS", tb.translated (o.x, o.y), Justification::centredLeft, false);
+            g.drawText ("LARGARTIXA SOUNDLAB", tb.translated (o.x, o.y), Justification::centredLeft, false);
         g.setColour (Colours::black);
-        g.drawText ("IRONHITS", tb.translated (2, 3), Justification::centredLeft, false);
+        g.drawText ("LARGARTIXA SOUNDLAB", tb.translated (2, 3), Justification::centredLeft, false);
         g.setGradientFill (ColourGradient (Colour (0xfff4f5f7), 0, 8, Colour (0xff6e717a), 0, 52, false));
-        g.drawText ("IRONHITS", tb, Justification::centredLeft, false);
+        g.drawText ("LARGARTIXA SOUNDLAB", tb, Justification::centredLeft, false);
 
         g.setFont (gfx::uiFont (12.f));
         g.setColour (col::dim);
@@ -284,7 +284,7 @@ private:
         repaint (1100, 470, 176, 160);
     }
 
-    IronHitsProcessor& proc;
+    LargartixaProcessor& proc;
     MetalLookAndFeel laf;
     Image texture;
 
@@ -309,7 +309,7 @@ private:
 };
 
 //==============================================================================
-IronHitsEditor::IronHitsEditor (IronHitsProcessor& p)
+LargartixaEditor::LargartixaEditor (LargartixaProcessor& p)
     : AudioProcessorEditor (&p), panel (std::make_unique<MainPanel> (p))
 {
     addAndMakeVisible (*panel);
@@ -319,9 +319,9 @@ IronHitsEditor::IronHitsEditor (IronHitsProcessor& p)
     setSize (MainPanel::W, MainPanel::H);
 }
 
-IronHitsEditor::~IronHitsEditor() = default;
+LargartixaEditor::~LargartixaEditor() = default;
 
-void IronHitsEditor::resized()
+void LargartixaEditor::resized()
 {
     panel->setTransform (AffineTransform::scale ((float) getWidth() / (float) MainPanel::W));
     panel->setBounds (0, 0, MainPanel::W, MainPanel::H);

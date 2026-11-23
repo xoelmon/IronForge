@@ -4,11 +4,11 @@
 #include "DSP.h"
 #include "Params.h"
 
-class IronHitsProcessor : public juce::AudioProcessor
+class LargartixaProcessor : public juce::AudioProcessor
 {
 public:
-    IronHitsProcessor();
-    ~IronHitsProcessor() override = default;
+    LargartixaProcessor();
+    ~LargartixaProcessor() override = default;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override {}
@@ -19,7 +19,7 @@ public:
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
-    const juce::String getName() const override { return "IRONHITS"; }
+    const juce::String getName() const override { return "LARGARTIXA SOUNDLAB"; }
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
@@ -66,5 +66,5 @@ private:
     float get (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
     bool  on  (const char* id) const { return get (id) > 0.5f; }
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (IronHitsProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (LargartixaProcessor)
 };

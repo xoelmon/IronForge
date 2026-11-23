@@ -1,4 +1,4 @@
-# IRONHITS — EQ + Compresor + Limitador + medidor LUFS/RMS (VST3)
+# LARGARTIXA SOUNDLAB — EQ + Compresor + Limitador + medidor LUFS/RMS (VST3)
 
 Cadena fija: **EQ -> Compresor -> Limitador**, y a la derecha un medidor de la salida.
 
@@ -15,11 +15,11 @@ Cadena fija: **EQ -> Compresor -> Limitador**, y a la derecha un medidor de la s
 ## Compilar con GitHub
 
 Sube los archivos de esta carpeta a la raíz de tu repositorio (sustituyen a los anteriores) y GitHub compila solo.
-El resultado aparece en Actions -> última ejecución -> Artifacts -> IRONHITS-Windows.
-Copia la carpeta `IRONHITS.vst3` a `C:\Program Files\Common Files\VST3\`.
-**Borra de esa carpeta el `IronForge.vst3` antiguo** para que no salgan los dos.
+El resultado aparece en Actions -> última ejecución -> Artifacts -> IRONHITS-Windows (el nombre del artefacto no cambia, el contenido sí).
+Copia la carpeta `LARGARTIXA SOUNDLAB.vst3` a `C:\Program Files\Common Files\VST3\`.
+**Borra de esa carpeta los `IronForge.vst3` e `IRONHITS.vst3` antiguos** para que no salgan los dos.
 
 ## Notas
-* Sin firma digital: SmartScreen puede avisar al abrir `IRONHITS.exe`.
+* Sin firma digital: SmartScreen puede avisar al abrir `LARGARTIXA SOUNDLAB.exe`.
 * No hay oversampling: no es un limitador true-peak. Para streaming/mp3 pon el ceiling en -1.0 dB.
 * Licencia: JUCE es AGPLv3 o de pago; si vendes el plugin sin publicar el código necesitas licencia comercial.
