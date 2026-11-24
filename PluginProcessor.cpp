@@ -82,11 +82,25 @@ AudioProcessorValueTreeState::ParameterLayout LargartixaProcessor::createParamet
     addFloat (ids::cMakeup,  "Comp Makeup",    NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
     addFloat (ids::cMix,     "Comp Mix",       NormalisableRange<float> (0.f, 100.f, 1.f), 100.f, fmtPct, parseNumber);
 
-    // ---------------- Limitador ----------------
-    addBool (ids::lOn, "Limiter On", true);
-    addFloat (ids::lGain,    "Limiter Gain",    NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
-    addFloat (ids::lCeil,    "Limiter Ceiling", NormalisableRange<float> (-12.f, 0.f, 0.1f), -0.3f, fmtDb, parseNumber);
-    addFloat (ids::lRelease, "Limiter Release", rangeWithCentre (10.f, 1000.f, 100.f), 100.f, fmtMs, parseNumber);
+    // ---------------- Clipper ----------------
+    addBool (ids::clipOn, "Clipper On", true);
+    addFloat (ids::clipDrive, "Clipper Drive",   NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
+    addFloat (ids::clipCeil,  "Clipper Ceiling", NormalisableRange<float> (-12.f, 0.f, 0.1f), -2.f, fmtDb, parseNumber);
+    addFloat (ids::clipSoft,  "Clipper Soft",    NormalisableRange<float> (0.f, 100.f, 1.f), 50.f, fmtPct, parseNumber);
+    addFloat (ids::clipMix,   "Clipper Mix",     NormalisableRange<float> (0.f, 100.f, 1.f), 100.f, fmtPct, parseNumber);
+
+    // ---------------- Limitador 1 ----------------
+    addBool (ids::lOn, "Limiter 1 On", true);
+    addFloat (ids::lGain,    "Limiter 1 Gain",    NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
+    addFloat (ids::lCeil,    "Limiter 1 Ceiling", NormalisableRange<float> (-12.f, 0.f, 0.1f), -1.0f, fmtDb, parseNumber);
+    addFloat (ids::lRelease, "Limiter 1 Release", rangeWithCentre (10.f, 1000.f, 100.f), 100.f, fmtMs, parseNumber);
+
+    // ---------------- Limitador 2 (true-peak) ----------------
+    addBool (ids::l2On, "Limiter 2 On", true);
+    addFloat (ids::l2Gain,    "Limiter 2 Gain",    NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
+    addFloat (ids::l2Ceil,    "Limiter 2 Ceiling", NormalisableRange<float> (-12.f, 0.f, 0.1f), -1.0f, fmtDb, parseNumber);
+    addFloat (ids::l2Release, "Limiter 2 Release", rangeWithCentre (10.f, 1000.f, 50.f), 50.f, fmtMs, parseNumber);
+    addBool (ids::l2TruePeak, "Limiter 2 True Peak", true);
 
     return layout;
 }
@@ -109,9 +123,12 @@ void LargartixaProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     eq.prepare (sampleRate, samplesPerBlock);
     comp.prepare (sampleRate);
-    limiter.prepare (sampleRate);
+    clipper.prepare (sampleRate, jmax (1, samplesPerBlock));
+    limiter1.prepare (sampleRate, false);
+    limiter2.prepare (sampleRate, true);
     loudness.prepare (sampleRate);
-    setLatencySamples (limiter.getLatencySamples());    // el DAW compensa la latencia del look-ahead
+    // El DAW compensa la latencia total: oversampling del clipper + look-ahead de los dos limitadores
+    setLatencySamples (clipper.getLatencySamples() + limiter1.getLatencySamples() + limiter2.getLatencySamples());
     scopeFifo.reset();
 }
 
@@ -149,12 +166,31 @@ void LargartixaProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     comp.update (cp);
     storeMax (compGrDb, comp.process (buffer));
 
-    // ---- 3) Limitador ----
-    ifg::LimiterParams lp;
-    lp.on = on (ids::lOn);
-    lp.driveDb = get (ids::lGain);  lp.ceilingDb = get (ids::lCeil);  lp.releaseMs = get (ids::lRelease);
-    limiter.update (lp);
-    storeMax (limGrDb, limiter.process (buffer));
+    // ---- 3) Clipper (oversampling x4) ----
+    storeMax (clipInPeak, jmax (buffer.getMagnitude (0, 0, n), buffer.getMagnitude (1, 0, n)));
+    ifg::ClipParams kp;
+    kp.on = on (ids::clipOn);
+    kp.driveDb = get (ids::clipDrive);  kp.ceilingDb = get (ids::clipCeil);
+    kp.soft = get (ids::clipSoft) * 0.01f;  kp.mix = get (ids::clipMix) * 0.01f;
+    clipper.update (kp);
+    storeMax (clipAmountDb, clipper.process (buffer));
+
+    // ---- 4) Limitador 1 ----
+    storeMax (lim1InPeak, jmax (buffer.getMagnitude (0, 0, n), buffer.getMagnitude (1, 0, n)));
+    ifg::LimiterParams l1;
+    l1.on = on (ids::lOn);
+    l1.driveDb = get (ids::lGain);  l1.ceilingDb = get (ids::lCeil);  l1.releaseMs = get (ids::lRelease);
+    limiter1.update (l1);
+    storeMax (lim1GrDb, limiter1.process (buffer));
+
+    // ---- 5) Limitador 2 (con detección true-peak opcional) ----
+    storeMax (lim2InPeak, jmax (buffer.getMagnitude (0, 0, n), buffer.getMagnitude (1, 0, n)));
+    ifg::LimiterParams l2;
+    l2.on = on (ids::l2On);
+    l2.driveDb = get (ids::l2Gain);  l2.ceilingDb = get (ids::l2Ceil);  l2.releaseMs = get (ids::l2Release);
+    l2.truePeak = on (ids::l2TruePeak);
+    limiter2.update (l2);
+    storeMax (lim2GrDb, limiter2.process (buffer));
 
     loudness.process (buffer);
 

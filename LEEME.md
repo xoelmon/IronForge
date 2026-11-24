@@ -1,25 +1,33 @@
-# LARGARTIXA SOUNDLAB — EQ + Compresor + Limitador + medidor LUFS/RMS (VST3)
+# LARGARTIXA SOUNDLAB — cadena de master en un plugin (VST3)
 
-Cadena fija: **EQ -> Compresor -> Limitador**, y a la derecha un medidor de la salida.
+Cadena fija (en este orden):  **EQ -> Compresor -> Clipper -> Limitador 1 -> Limitador 2**,
+con un medidor de sonoridad de la salida en la columna derecha.
 
 * **EQ:** paso-alto 24 dB/oct + 4 bandas (shelf grave, 2 campanas, shelf agudo). Nodos arrastrables,
   rueda sobre un nodo = Q, doble clic = ganancia a 0. Analizador de espectro.
 * **Compresor:** threshold, ratio, knee, attack, release, makeup, mix paralelo.
-* **Limitador:** brickwall con lookahead de 5 ms (latencia que el DAW compensa solo), gain, ceiling, release.
-* **Medidor de salida (columna derecha):**
-  * LUFS (ITU-R BS.1770 / EBU R128): Momentary (400 ms), Short-term (3 s) e Integrated (con puertas -70 LUFS y -10 LU).
-  * RMS izquierdo y derecho (ventana de 300 ms, sin ponderar: un seno a -20 dBFS de pico marca -23 dB).
-  * Pico de muestra (dBFS). El botón RESET reinicia el Integrated y el pico (úsalo al empezar a reproducir el tema).
-  * Mide la señal ya procesada (después del limitador).
+* **Clipper:** drive, ceiling, soft (0 % = recorte duro, 100 % = saturación suave tipo tanh) y mix.
+  Funciona con **oversampling x4** para evitar aliasing. Tras el filtro de oversampling la muestra puede pasar
+  ~0,3 dB del ceiling: para eso están los limitadores detrás.
+* **Limitador 1:** brickwall con lookahead de 5 ms (gain, ceiling, release).
+* **Limitador 2:** igual, con **detector true-peak** (interpolación x4 estilo ITU-R BS.1770) activable con el
+  botón TRUE PEAK. Con señal tipo música deja el true-peak a ~0,05 dB del ceiling.
+* **Medidor de salida:** LUFS (momentary, short-term, integrated) y RMS L/R, pico de muestra. RESET reinicia el
+  integrated y el pico. Mide la señal ya procesada (después del limitador 2).
+* Cada módulo tiene su botón ON/OFF (LED rojo). Doble clic en un knob = valor por defecto;
+  doble clic en el número = escribir un valor.
+
+## Latencia
+El plugin declara al DAW la latencia total (oversampling del clipper + lookahead de los dos limitadores):
+unas 551 muestras (~11,5 ms a 48 kHz). El DAW la compensa solo al mezclar o masterizar.
+Si grabas escuchándote a través del plugin, desactiva los módulos que no necesites o no lo pongas en esa pista.
 
 ## Compilar con GitHub
-
 Sube los archivos de esta carpeta a la raíz de tu repositorio (sustituyen a los anteriores) y GitHub compila solo.
-El resultado aparece en Actions -> última ejecución -> Artifacts -> IRONHITS-Windows (el nombre del artefacto no cambia, el contenido sí).
-Copia la carpeta `LARGARTIXA SOUNDLAB.vst3` a `C:\Program Files\Common Files\VST3\`.
-**Borra de esa carpeta los `IronForge.vst3` e `IRONHITS.vst3` antiguos** para que no salgan los dos.
+Resultado: Actions -> última ejecución -> Artifacts. Copia la carpeta `LARGARTIXA SOUNDLAB.vst3` a
+`C:\Program Files\Common Files\VST3\` (con el DAW cerrado, sustituyendo la anterior).
 
 ## Notas
-* Sin firma digital: SmartScreen puede avisar al abrir `LARGARTIXA SOUNDLAB.exe`.
-* No hay oversampling: no es un limitador true-peak. Para streaming/mp3 pon el ceiling en -1.0 dB.
+* Sin firma digital: SmartScreen puede avisar al abrir el `.exe` independiente.
+* Para streaming/mp3: Limitador 2 con TRUE PEAK activado y ceiling en -1.0 dB.
 * Licencia: JUCE es AGPLv3 o de pago; si vendes el plugin sin publicar el código necesitas licencia comercial.

@@ -511,6 +511,72 @@ private:
 };
 
 //==============================================================================
+//  Curva de transferencia del clipper (entrada -> salida, ambos semiciclos) con punto en vivo
+//==============================================================================
+class ClipCurve : public juce::Component
+{
+public:
+    explicit ClipCurve (juce::AudioProcessorValueTreeState& a) : apvts (a) { setInterceptsMouseClicks (false, false); }
+
+    void setInputPeak (float lin) { inPeak = lin; repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        using namespace juce;
+        auto full = getLocalBounds().toFloat();
+        gfx::drawScreen (g, full);
+        const auto r = full.reduced (6.f);
+
+        auto v = [this] (const char* id) { return apvts.getRawParameterValue (id)->load(); };
+        const float drive = Decibels::decibelsToGain (v (ids::clipDrive));
+        const float ceil  = Decibels::decibelsToGain (v (ids::clipCeil));
+        const float knee  = 1.f - v (ids::clipSoft) * 0.01f;
+        const float mix   = v (ids::clipMix) * 0.01f;
+        const bool on     = v (ids::clipOn) > 0.5f;
+
+        auto X = [&] (float x) { return jmap (x, -1.f, 1.f, r.getX(), r.getRight()); };
+        auto Y = [&] (float y) { return jmap (y, -1.f, 1.f, r.getBottom(), r.getY()); };
+        auto transfer = [&] (float x) { const float wet = ifg::Clipper::shape (x * drive, ceil, knee); return x + (wet - x) * mix; };
+
+        g.setColour (Colour (0x16ffffff));                                   // ejes
+        g.drawVerticalLine ((int) X (0.f), r.getY(), r.getBottom());
+        g.drawHorizontalLine ((int) Y (0.f), r.getX(), r.getRight());
+        g.setColour (Colour (0x30ffffff));                                   // diagonal 1:1
+        g.drawLine (X (-1.f), Y (-1.f), X (1.f), Y (1.f), 1.f);
+        g.setColour (col::dim.withAlpha (0.6f));                             // líneas del techo
+        for (float s : { -1.f, 1.f })
+            g.drawHorizontalLine ((int) Y (s * ceil), r.getX(), r.getRight());
+
+        Path curve;
+        for (int px = 0; px <= (int) r.getWidth(); ++px)
+        {
+            const float x = -1.f + 2.f * (float) px / r.getWidth();
+            const float yy = Y (jlimit (-1.f, 1.f, transfer (x)));
+            if (px == 0) curve.startNewSubPath (r.getX(), yy); else curve.lineTo (r.getX() + (float) px, yy);
+        }
+        const float a = on ? 1.f : 0.35f;
+        g.setColour (col::glow.withAlpha (0.25f * a));
+        g.strokePath (curve, PathStrokeType (6.f, PathStrokeType::curved, PathStrokeType::rounded));
+        g.setColour (col::glow.withAlpha (a));
+        g.strokePath (curve, PathStrokeType (2.2f, PathStrokeType::curved, PathStrokeType::rounded));
+
+        if (on && inPeak > 0.0005f)
+        {
+            const float x = jmin (inPeak, 1.f);
+            const Point<float> p (X (x), Y (jlimit (-1.f, 1.f, transfer (x))));
+            g.setColour (col::bone.withAlpha (0.3f));
+            g.fillEllipse (p.x - 7.f, p.y - 7.f, 14.f, 14.f);
+            g.setColour (col::bone);
+            g.fillEllipse (p.x - 3.5f, p.y - 3.5f, 7.f, 7.f);
+        }
+    }
+
+private:
+    juce::AudioProcessorValueTreeState& apvts;
+    float inPeak = 0.f;
+};
+
+//==============================================================================
 //  Pantalla del EQ: analizador de espectro + curva de respuesta + nodos arrastrables
 //    arrastrar nodo = frecuencia/ganancia · rueda = Q · doble clic = ganancia a 0
 //==============================================================================

@@ -19,8 +19,20 @@ namespace ids
     inline constexpr const char* cMakeup  = "c_makeup";
     inline constexpr const char* cMix     = "c_mix";
 
+    inline constexpr const char* clipOn    = "clip_on";
+    inline constexpr const char* clipDrive = "clip_drive";
+    inline constexpr const char* clipCeil  = "clip_ceil";
+    inline constexpr const char* clipSoft  = "clip_soft";
+    inline constexpr const char* clipMix   = "clip_mix";
+
     inline constexpr const char* lOn      = "l_on";
     inline constexpr const char* lGain    = "l_gain";
     inline constexpr const char* lCeil    = "l_ceiling";
     inline constexpr const char* lRelease = "l_release";
+
+    inline constexpr const char* l2On      = "l2_on";
+    inline constexpr const char* l2Gain    = "l2_gain";
+    inline constexpr const char* l2Ceil    = "l2_ceiling";
+    inline constexpr const char* l2Release = "l2_release";
+    inline constexpr const char* l2TruePeak = "l2_truepeak";
 }

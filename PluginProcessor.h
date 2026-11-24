@@ -41,9 +41,14 @@ public:
     // --- Datos para los medidores (el audio los escribe, la interfaz los lee y los pone a 0) ---
     std::atomic<float> inPeak[2]  { 0.f, 0.f };   // lineal
     std::atomic<float> outPeak[2] { 0.f, 0.f };   // lineal
-    std::atomic<float> compInPeak { 0.f };        // lineal
+    std::atomic<float> compInPeak { 0.f };        // lineal (entrada del compresor)
     std::atomic<float> compGrDb   { 0.f };        // dB de reducción (positivo)
-    std::atomic<float> limGrDb    { 0.f };        // dB de reducción (positivo)
+    std::atomic<float> clipInPeak { 0.f };        // lineal (entrada del clipper)
+    std::atomic<float> clipAmountDb { 0.f };      // dB recortados (positivo)
+    std::atomic<float> lim1InPeak { 0.f };        // lineal (entrada del limitador 1)
+    std::atomic<float> lim1GrDb   { 0.f };
+    std::atomic<float> lim2InPeak { 0.f };        // lineal (entrada del limitador 2)
+    std::atomic<float> lim2GrDb   { 0.f };
 
     // --- Sonoridad de la salida (LUFS / RMS) ---
     ifg::LoudnessMeter loudness;
@@ -55,7 +60,8 @@ public:
 private:
     ifg::Equalizer  eq;
     ifg::Compressor comp;
-    ifg::Limiter    limiter;
+    ifg::Clipper    clipper;
+    ifg::Limiter    limiter1, limiter2;
 
     static void storeMax (std::atomic<float>& a, float v) noexcept
     {

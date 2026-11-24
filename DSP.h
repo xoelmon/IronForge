@@ -1,12 +1,14 @@
 #pragma once
 
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_dsp/juce_dsp.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <complex>
+#include <memory>
 #include <vector>
 
 namespace ifg
@@ -269,30 +271,156 @@ private:
 };
 
 //==============================================================================
+//  CLIPPER con oversampling x4 (evita el aliasing que genera recortar la señal).
+//  Forma ajustable: duro (recorte plano) <-> suave (rodilla tipo tanh). Nunca supera el techo (ceiling).
+//  El wet y el dry salen alineados en el tiempo, así que la mezcla (mix) es limpia.
+//==============================================================================
+struct ClipParams
+{
+    bool  on = true;
+    float driveDb = 0.f, ceilingDb = -2.f, soft = 0.5f, mix = 1.f;   // soft 0 = duro, 1 = suave
+};
+
+class Clipper
+{
+public:
+    // Función de transferencia estática. knee = 1 -> recorte duro; knee = 0 -> tanh completo.
+    static float shape (float x, float ceiling, float knee)
+    {
+        const float u = std::abs (x) / ceiling;
+        float y;
+        if (u <= knee)              y = u;
+        else if (knee >= 0.9999f)   y = 1.f;
+        else                        y = knee + (1.f - knee) * std::tanh ((u - knee) / (1.f - knee));
+        return std::copysign (y * ceiling, x);
+    }
+
+    void prepare (double sr, int maxBlock)
+    {
+        maxBlockSize = std::max (1, maxBlock);
+        os = std::make_unique<juce::dsp::Oversampling<float>> (2, 2, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        os->initProcessing ((size_t) maxBlockSize);
+        latency = (int) std::lround (os->getLatencyInSamples());
+
+        dryDelay.prepare ({ sr, (juce::uint32) maxBlockSize, 2 });
+        dryDelay.setDelay ((float) latency);
+        dryDelay.reset();
+        dryScratch.setSize (2, maxBlockSize);
+
+        driveSmooth.reset (sr * 4.0, 0.02);  driveSmooth.setCurrentAndTargetValue (1.f);
+        wetSmooth.reset (sr, 0.02);          wetSmooth.setCurrentAndTargetValue (1.f);
+    }
+
+    int getLatencySamples() const { return latency; }
+
+    void update (const ClipParams& p)
+    {
+        active = p.on;
+        ceilingLin = juce::Decibels::decibelsToGain (p.ceilingDb);
+        knee = 1.f - juce::jlimit (0.f, 1.f, p.soft);
+        driveSmooth.setTargetValue (juce::Decibels::decibelsToGain (p.driveDb));
+        wetSmooth.setTargetValue (p.on ? p.mix : 0.f);
+    }
+
+    // Devuelve cuánto ha recortado el pico del bloque, en dB (positivo)
+    float process (juce::AudioBuffer<float>& buf)
+    {
+        const int total = buf.getNumSamples();
+        float maxIn = 0.f, maxOut = 0.f;
+
+        for (int start = 0; start < total; start += maxBlockSize)
+        {
+            const int len = std::min (maxBlockSize, total - start);
+
+            // 1) copia del dry retrasada lo mismo que el oversampler
+            for (int c = 0; c < 2; ++c)
+            {
+                const float* src = buf.getReadPointer (c) + start;
+                float* dst = dryScratch.getWritePointer (c);
+                for (int i = 0; i < len; ++i)
+                {
+                    dryDelay.pushSample (c, src[i]);
+                    dst[i] = dryDelay.popSample (c);
+                }
+            }
+
+            const bool needWet = wetSmooth.isSmoothing() || wetSmooth.getTargetValue() > 0.f;
+            auto sub = juce::dsp::AudioBlock<float> (buf).getSubBlock ((size_t) start, (size_t) len);
+
+            if (needWet)
+            {
+                auto up = os->processSamplesUp (sub);
+                float* l = up.getChannelPointer (0);
+                float* r = up.getChannelPointer (1);
+                const size_t m = up.getNumSamples();
+                for (size_t i = 0; i < m; ++i)
+                {
+                    const float dg = driveSmooth.getNextValue();
+                    const float a = l[i] * dg, b = r[i] * dg;
+                    maxIn = std::max ({ maxIn, std::abs (a), std::abs (b) });
+                    l[i] = shape (a, ceilingLin, knee);
+                    r[i] = shape (b, ceilingLin, knee);
+                    maxOut = std::max ({ maxOut, std::abs (l[i]), std::abs (r[i]) });
+                }
+                os->processSamplesDown (sub);
+            }
+
+            // 2) mezcla wet/dry alineada (el crossfade del ON/OFF también pasa por aquí)
+            float* ol = buf.getWritePointer (0) + start;
+            float* orr = buf.getWritePointer (1) + start;
+            const float* dl = dryScratch.getReadPointer (0);
+            const float* dr = dryScratch.getReadPointer (1);
+            for (int i = 0; i < len; ++i)
+            {
+                const float w = wetSmooth.getNextValue();
+                if (needWet) { ol[i] = dl[i] + (ol[i] - dl[i]) * w;  orr[i] = dr[i] + (orr[i] - dr[i]) * w; }
+                else         { ol[i] = dl[i];                         orr[i] = dr[i]; }
+            }
+        }
+        return (active && maxIn > 1.0e-6f) ? std::max (0.f, 20.f * std::log10 (maxIn / std::max (maxOut, 1.0e-9f))) : 0.f;
+    }
+
+private:
+    std::unique_ptr<juce::dsp::Oversampling<float>> os;
+    juce::dsp::DelayLine<float, juce::dsp::DelayLineInterpolationTypes::None> dryDelay { 2048 };
+    juce::AudioBuffer<float> dryScratch;
+    juce::SmoothedValue<float> driveSmooth, wetSmooth;
+    int maxBlockSize = 512, latency = 0;
+    float ceilingLin = 0.8f, knee = 0.5f;
+    bool active = true;
+};
+
+//==============================================================================
 //  LIMITADOR brickwall con look-ahead de 5 ms.
 //  Mínimo deslizante + media móvil sobre la ganancia => ataque suave y garantía
 //  matemática de que la salida nunca supera el techo (ceiling).
-//  Introduce una latencia fija de (lookahead - 1) muestras que el DAW compensa.
+//  Opcional (si se prepara con truePeakCapable): detector de picos entre muestras
+//  (interpolación x4, estilo ITU-R BS.1770) que añade ~12 muestras de latencia fija.
+//  La latencia es constante aunque se active o desactive, para que el DAW la compense siempre igual.
 //==============================================================================
 struct LimiterParams
 {
     bool  on = true;
     float driveDb = 0.f, ceilingDb = -0.3f, releaseMs = 100.f;
+    bool  truePeak = false;
 };
 
 class Limiter
 {
 public:
-    void prepare (double sr)
+    void prepare (double sr, bool truePeakCapable)
     {
         sampleRate = sr;
         L = std::max (2, (int) std::lround (sr * 0.005));
-        for (auto& d : delay) d.assign ((size_t) L, 0.f);
+        H = truePeakCapable ? kTpHalfTaps : 0;
+        S = L + H;
+        for (auto& d : delay) d.assign ((size_t) S, 0.f);
         qIdx.assign ((size_t) L + 2, 0);
         qVal.assign ((size_t) L + 2, 1.f);
         avg.assign ((size_t) L, 1.f);
         drive.reset (sr, 0.02);
         drive.setCurrentAndTargetValue (1.f);
+        if (H > 0) makeTruePeakFilters();
         reset();
     }
 
@@ -301,14 +429,15 @@ public:
         for (auto& d : delay) std::fill (d.begin(), d.end(), 0.f);
         std::fill (avg.begin(), avg.end(), 1.f);
         qHead = qCount = 0;  counter = 0;  avgPos = 0;  wPos = 0;
-        sum = (double) L;  env = 1.f;
+        sum = (double) L;  env = 1.f;  jPrev = 0.f;
     }
 
-    int getLatencySamples() const { return L - 1; }
+    int getLatencySamples() const { return S - 1; }
 
     void update (const LimiterParams& p)
     {
         active     = p.on;
+        tpOn       = p.truePeak && H > 0;
         ceilingLin = p.on ? juce::Decibels::decibelsToGain (p.ceilingDb) : 1000.f;
         drive.setTargetValue (p.on ? juce::Decibels::decibelsToGain (p.driveDb) : 1.f);
         relCoef = std::exp (-1.f / (juce::jmax (1.f, p.releaseMs) * 0.001f * (float) sampleRate));
@@ -326,10 +455,16 @@ public:
         {
             const float d  = drive.getNextValue();
             const float xl = ch[0][i] * d, xr = ch[1][i] * d;
-            const float peak = std::max (std::abs (xl), std::abs (xr));
+
+            // 0) la muestra nueva entra en la línea de retardo (que también es el historial del detector)
+            delay[0][(size_t) wPos] = xl;
+            delay[1][(size_t) wPos] = xr;
+
+            // 1) pico a limitar: de la muestra, o el true-peak de su entorno (desfasado H muestras)
+            const float peak = H > 0 ? detectNeighbourhoodPeak() : std::max (std::abs (xl), std::abs (xr));
             const float g = peak > ceilingLin ? ceilingLin / peak : 1.f;
 
-            // 1) mínimo deslizante de la ganancia sobre L muestras (cola monótona)
+            // 2) mínimo deslizante de la ganancia sobre L muestras (cola monótona)
             while (qCount > 0 && qVal[(size_t) ((qHead + qCount - 1) % cap)] >= g)
                 --qCount;
             const int tail = (qHead + qCount) % cap;
@@ -344,36 +479,83 @@ public:
             const float m = qVal[(size_t) qHead];
             ++counter;
 
-            // 2) media móvil de L muestras => rampa de ataque suave
+            // 3) media móvil de L muestras => rampa de ataque suave
             sum += (double) m - (double) avg[(size_t) avgPos];
             avg[(size_t) avgPos] = m;
             avgPos = (avgPos + 1) % L;
             const float b = (float) (sum / (double) L);
 
-            // 3) release: la ganancia baja al instante y sube con la constante de release
+            // 4) release: la ganancia baja al instante y sube con la constante de release
             env = (b < env) ? b : b + relCoef * (env - b);
             minEnv = std::min (minEnv, env);
 
-            // 4) retraso de (L-1) muestras + aplicar ganancia
-            const float in[2] = { xl, xr };
-            const int rPos = (wPos + 1) % L;
+            // 5) salida: la muestra más antigua (retardo S-1) con la ganancia aplicada
+            const int rPos = (wPos + 1) % S;
             for (int c = 0; c < 2; ++c)
-            {
-                delay[(size_t) c][(size_t) wPos] = in[c];
-                const float delayed = delay[(size_t) c][(size_t) rPos];
-                ch[c][i] = juce::jlimit (-ceilingLin, ceilingLin, delayed * env);   // seguro final
-            }
+                ch[c][i] = juce::jlimit (-ceilingLin, ceilingLin, delay[(size_t) c][(size_t) rPos] * env);   // seguro final
             wPos = rPos;
         }
         return active ? -juce::Decibels::gainToDecibels (minEnv, -100.f) : 0.f;
     }
 
 private:
+    static constexpr int kTpHalfTaps = 12;           // 24 coeficientes por fase, 3 fases (1/4, 1/2, 3/4)
+
+    void makeTruePeakFilters()
+    {
+        const double pi = juce::MathConstants<double>::pi;
+        for (int ph = 0; ph < 3; ++ph)
+        {
+            const double frac = 0.25 * (double) (ph + 1);
+            std::array<double, 2 * kTpHalfTaps> c {};
+            double total = 0.0;
+            for (int t = 0; t < 2 * H; ++t)
+            {
+                const double u = (double) (-H + 1 + t) - frac;                  // distancia al punto interpolado
+                const double sinc = std::abs (u) < 1.0e-9 ? 1.0 : std::sin (pi * u) / (pi * u);
+                const double x = u / (double) H;
+                const double win = 0.42 + 0.5 * std::cos (pi * x) + 0.08 * std::cos (2.0 * pi * x);   // Blackman
+                c[(size_t) t] = sinc * win;
+                total += c[(size_t) t];
+            }
+            for (int t = 0; t < 2 * H; ++t)
+                tpCoef[(size_t) ph][(size_t) t] = (float) (c[(size_t) t] / total);
+        }
+    }
+
+    // Pico (incluyendo puntos interpolados entre muestras) en el entorno de la muestra x[n-H]
+    float detectNeighbourhoodPeak()
+    {
+        float j = 0.f;
+        float hist[2 * kTpHalfTaps];
+        for (int c = 0; c < 2; ++c)
+        {
+            const float* r = delay[(size_t) c].data();
+            j = std::max (j, std::abs (r[(size_t) ((wPos - (H - 1) + S) % S)]));        // x[i+1]
+            if (tpOn)
+            {
+                for (int t = 0; t < 2 * H; ++t)
+                    hist[t] = r[(size_t) ((wPos - (2 * H - 1 - t) + S) % S)];          // x[i-H+1 .. i+H]
+                for (size_t ph = 0; ph < 3; ++ph)
+                {
+                    float acc = 0.f;
+                    const float* h = tpCoef[ph].data();
+                    for (int t = 0; t < 2 * H; ++t) acc += hist[t] * h[t];
+                    j = std::max (j, std::abs (acc));
+                }
+            }
+        }
+        const float tp = std::max (jPrev, j);                                          // entorno (i-1, i+1]
+        jPrev = j;
+        return tp;
+    }
+
     double sampleRate = 44100.0;
-    int L = 240;
-    bool active = true;
-    float ceilingLin = 1.f, relCoef = 0.f, env = 1.f;
+    int L = 240, H = 0, S = 240;
+    bool active = true, tpOn = false;
+    float ceilingLin = 1.f, relCoef = 0.f, env = 1.f, jPrev = 0.f;
     std::array<std::vector<float>, 2> delay;
+    std::array<std::array<float, 2 * kTpHalfTaps>, 3> tpCoef {};
     std::vector<int64_t> qIdx;
     std::vector<float>   qVal, avg;
     int qHead = 0, qCount = 0, avgPos = 0, wPos = 0;
@@ -381,7 +563,6 @@ private:
     double sum = 0.0;
     juce::SmoothedValue<float> drive;
 };
-
 
 //==============================================================================
 //  MEDIDOR DE SONORIDAD ITU-R BS.1770-4 / EBU R128 (LUFS) + RMS

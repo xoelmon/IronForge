@@ -4,32 +4,44 @@
 using namespace juce;
 
 //==============================================================================
-//  Panel principal: tamaño lógico fijo (1100 x 680) que se escala al redimensionar la ventana
+//  Panel principal: tamaño lógico fijo (1290 x 944) que se escala al redimensionar la ventana
+//
+//    [ EQ                              ]  [ OUTPUT ]
+//    [ Compresor ]  [ Clipper          ]  [ LUFS / RMS ]
+//    [ Limitador 1 ] [ Limitador 2     ]  [ hasta abajo ]
 //==============================================================================
 class MainPanel : public Component, private Timer
 {
 public:
-    static constexpr int W = 1290, H = 680;
+    static constexpr int W = 1290, H = 944;
+    static constexpr int dy = H - 680;                 // alto extra que gana la columna de sonoridad
 
     explicit MainPanel (LargartixaProcessor& p)
-        : proc (p), eqDisplay (p), compCurve (p.apvts),
-          compHistory (24.f), limHistory (12.f),
+        : proc (p), eqDisplay (p), compCurve (p.apvts), clipCurve (p.apvts),
+          compHistory (24.f), clipHistory (12.f), lim1History (12.f), lim2History (12.f),
           inMeter (2, false, 48.f), outMeter (2, false, 48.f),
-          compGrMeter (1, true, 24.f), limGrMeter (1, true, 12.f),
+          compGrMeter (1, true, 24.f), clipMeter (1, true, 12.f), lim1GrMeter (1, true, 12.f), lim2GrMeter (1, true, 12.f),
           loudM (1, false, 54.f), loudS (1, false, 54.f), rmsLMeter (1, false, 54.f), rmsRMeter (1, false, 54.f)
     {
         setLookAndFeel (&laf);
         texture = gfx::makeBrushedTexture();
 
-        for (auto* b : { &eqBtn, &compBtn, &limBtn })
-            addAndMakeVisible (*b);
         using BA = AudioProcessorValueTreeState::ButtonAttachment;
-        eqAtt   = std::make_unique<BA> (p.apvts, ids::eqOn, eqBtn);
-        compAtt = std::make_unique<BA> (p.apvts, ids::cOn,  compBtn);
-        limAtt  = std::make_unique<BA> (p.apvts, ids::lOn,  limBtn);
+        auto addToggle = [&] (ToggleButton& b, const char* id, std::unique_ptr<BA>& att)
+        {
+            addAndMakeVisible (b);
+            att = std::make_unique<BA> (p.apvts, id, b);
+        };
+        addToggle (eqBtn,   ids::eqOn,       eqAtt);
+        addToggle (compBtn, ids::cOn,        compAtt);
+        addToggle (clipBtn, ids::clipOn,     clipAtt);
+        addToggle (lim1Btn, ids::lOn,        lim1Att);
+        addToggle (lim2Btn, ids::l2On,       lim2Att);
+        addToggle (tpBtn,   ids::l2TruePeak, tpAtt);
 
-        for (auto* c : std::initializer_list<Component*> { &eqDisplay, &compCurve, &compHistory, &limHistory,
-                                                           &inMeter, &outMeter, &compGrMeter, &limGrMeter,
+        for (auto* c : std::initializer_list<Component*> { &eqDisplay, &compCurve, &clipCurve,
+                                                           &compHistory, &clipHistory, &lim1History, &lim2History,
+                                                           &inMeter, &outMeter, &compGrMeter, &clipMeter, &lim1GrMeter, &lim2GrMeter,
                                                            &loudM, &loudS, &rmsLMeter, &rmsRMeter, &resetBtn })
             addAndMakeVisible (*c);
 
@@ -52,10 +64,18 @@ public:
             { ids::cThresh, "Thresh" }, { ids::cRatio, "Ratio" }, { ids::cKnee, "Knee" },
             { ids::cAttack, "Attack" }, { ids::cRelease, "Release" }, { ids::cMakeup, "Makeup" }, { ids::cMix, "Mix" } };
         for (int i = 0; i < 7; ++i) compKnobs[i] = addKnob (cp[i].first, cp[i].second);
-        // --- Limitador ---
-        limKnobs[0] = addKnob (ids::lGain,    "Gain");
-        limKnobs[1] = addKnob (ids::lCeil,    "Ceiling");
-        limKnobs[2] = addKnob (ids::lRelease, "Release");
+        // --- Clipper ---
+        clipKnobs[0] = addKnob (ids::clipDrive, "Drive");
+        clipKnobs[1] = addKnob (ids::clipCeil,  "Ceiling");
+        clipKnobs[2] = addKnob (ids::clipSoft,  "Soft");
+        clipKnobs[3] = addKnob (ids::clipMix,   "Mix");
+        // --- Limitadores ---
+        lim1Knobs[0] = addKnob (ids::lGain,    "Gain");
+        lim1Knobs[1] = addKnob (ids::lCeil,    "Ceiling");
+        lim1Knobs[2] = addKnob (ids::lRelease, "Release");
+        lim2Knobs[0] = addKnob (ids::l2Gain,    "Gain");
+        lim2Knobs[1] = addKnob (ids::l2Ceil,    "Ceiling");
+        lim2Knobs[2] = addKnob (ids::l2Release, "Release");
 
         setSize (W, H);
         startTimerHz (30);
@@ -66,9 +86,12 @@ public:
     //--------------------------------------------------------------------------
     void resized() override
     {
-        eqPanel = { 14.f, 70.f, 1072.f, 300.f };
-        compPanel = { 14.f, 380.f, 531.f, 286.f };
-        limPanel = { 555.f, 380.f, 531.f, 286.f };
+        eqPanel   = { 14.f,  70.f,  1072.f, 300.f };
+        compPanel = { 14.f,  380.f, 531.f,  286.f };
+        clipPanel = { 555.f, 380.f, 531.f,  286.f };
+        lim1Panel = { 14.f,  676.f, 531.f,  254.f };
+        lim2Panel = { 555.f, 676.f, 531.f,  254.f };
+        sidePanel = { 1100.f, 70.f, 176.f, (float) (H - 84) };
 
         // ---- EQ ----
         eqBtn.setBounds (28, 74, 220, 26);
@@ -98,22 +121,37 @@ public:
         for (int i = 0; i < 7; ++i)
             compKnobs[i]->setBounds ((int) (26.f + (float) i * cw), 554, (int) cw, 102);
 
-        // ---- Limitador ----
-        limBtn.setBounds (569, 384, 220, 26);
-        limHistory.setBounds (567, 416, 421, 132);
-        limGrMeter.setBounds (996, 430, 30, 118);
-        outMeter.setBounds (1034, 430, 40, 118);
-        for (int i = 0; i < 3; ++i)
-            limKnobs[i]->setBounds (577 + i * 96, 554, 96, 102);
+        // ---- Clipper ----
+        clipBtn.setBounds (569, 384, 220, 26);
+        clipCurve.setBounds (567, 416, 132, 132);
+        clipHistory.setBounds (707, 416, 327, 132);
+        clipMeter.setBounds (1044, 430, 30, 118);
+        for (int i = 0; i < 4; ++i)
+            clipKnobs[i]->setBounds (580 + i * 120, 554, 120, 102);
 
-        // ---- Columna de sonoridad (derecha) ----
-        sidePanel = { 1100.f, 70.f, 176.f, 596.f };
-        const int bx = 1134, bw = 27, bstep = 33, by = 120, bh = 330;
+        // ---- Limitador 1 ----
+        lim1Btn.setBounds (28, 680, 220, 26);
+        lim1History.setBounds (26, 712, 469, 98);
+        lim1GrMeter.setBounds (503, 726, 30, 84);
+        for (int i = 0; i < 3; ++i)
+            lim1Knobs[i]->setBounds (36 + i * 96, 816, 96, 102);
+
+        // ---- Limitador 2 (true-peak) ----
+        lim2Btn.setBounds (569, 680, 220, 26);
+        lim2History.setBounds (567, 712, 421, 98);
+        lim2GrMeter.setBounds (996, 726, 30, 84);
+        outMeter.setBounds (1034, 726, 40, 84);
+        for (int i = 0; i < 3; ++i)
+            lim2Knobs[i]->setBounds (577 + i * 96, 816, 96, 102);
+        tpBtn.setBounds (876, 826, 190, 26);
+
+        // ---- Columna de sonoridad (derecha, hasta abajo) ----
+        const int bx = 1134, bw = 27, bstep = 33, by = 120, bh = 330 + dy;
         loudM.setBounds (bx, by, bw, bh);
         loudS.setBounds (bx + bstep, by, bw, bh);
         rmsLMeter.setBounds (bx + 2 * bstep + 6, by, bw, bh);
         rmsRMeter.setBounds (bx + 3 * bstep + 6, by, bw, bh);
-        resetBtn.setBounds (1114, 634, 148, 24);
+        resetBtn.setBounds (1114, 634 + dy, 148, 24);
     }
 
     //--------------------------------------------------------------------------
@@ -125,10 +163,8 @@ public:
         g.fillAll();
 
         paintHeader (g);
-        gfx::drawMetalPanel (g, eqPanel, texture);
-        gfx::drawMetalPanel (g, compPanel, texture);
-        gfx::drawMetalPanel (g, limPanel, texture);
-        gfx::drawMetalPanel (g, sidePanel, texture);
+        for (auto* r : { &eqPanel, &compPanel, &clipPanel, &lim1Panel, &lim2Panel, &sidePanel })
+            gfx::drawMetalPanel (g, *r, texture);
         paintLoudness (g);
 
         // títulos de grupo del EQ
@@ -148,23 +184,29 @@ public:
         // etiquetas de medidores
         g.setFont (gfx::uiFont (10.f));
         g.setColour (col::steelHi);
-        g.drawText ("IN",  1040, 102, 34, 12, Justification::centred, false);
-        g.drawText ("GR",  503, 416, 30, 12, Justification::centred, false);
-        g.drawText ("GR",  996, 416, 30, 12, Justification::centred, false);
-        g.drawText ("OUT", 1034, 416, 40, 12, Justification::centred, false);
+        g.drawText ("IN",   1040, 102, 34, 12, Justification::centred, false);
+        g.drawText ("GR",    503, 416, 30, 12, Justification::centred, false);
+        g.drawText ("CLIP", 1044, 416, 30, 12, Justification::centred, false);
+        g.drawText ("GR",    503, 712, 30, 12, Justification::centred, false);
+        g.drawText ("GR",    996, 712, 30, 12, Justification::centred, false);
+        g.drawText ("OUT",  1034, 712, 40, 12, Justification::centred, false);
 
-        // texto informativo del limitador
+        // textos informativos
         g.setColour (col::dim);
         g.setFont (gfx::uiFont (11.f));
-        const auto info = Rectangle<float> (872.f, 560.f, 200.f, 90.f);
-        g.drawFittedText ("BRICKWALL\nLOOKAHEAD  5 ms\nLATENCY  " + String (proc.getLatencySamples()) + " smp\nSTEREO LINKED",
-                          info.toNearestInt(), Justification::topRight, 5);
+        g.drawText ("4x OVERSAMPLING", 800, 384, 264, 26, Justification::centredRight, false);
+        g.drawFittedText ("BRICKWALL\nLOOKAHEAD  5 ms\nSTEREO LINKED", Rectangle<int> (331, 826, 202, 60), Justification::topRight, 4);
+
+        const int lat = proc.getLatencySamples();
+        const double sr = proc.getSampleRate() > 0.0 ? proc.getSampleRate() : 48000.0;
+        g.drawFittedText ("LOOKAHEAD  5 ms\nTOTAL LATENCY  " + String (lat) + " smp\n= " + String ((double) lat * 1000.0 / sr, 1) + " ms",
+                          Rectangle<int> (863, 862, 207, 60), Justification::topRight, 4);
     }
 
 private:
     void paintLoudness (Graphics& g)
     {
-        const int bx = 1134, bw = 27, bstep = 33, by = 120, bh = 330;
+        const int bx = 1134, bw = 27, bstep = 33, by = 120, bh = 330 + dy;
         g.setFont (gfx::titleFont (17.f));
         g.setColour (col::bone);
         g.drawText ("OUTPUT", 1118, 76, 150, 24, Justification::centredLeft, false);
@@ -179,15 +221,18 @@ private:
             g.drawText (letters[i], bx + i * bstep + (i >= 2 ? 6 : 0), by + bh + 2, bw, 12, Justification::centred, false);
 
         g.setFont (gfx::uiFont (9.f, false));                       // escala en dB
-        for (int db = 0; db >= -54; db -= 6)
+        for (int db = 0; db >= -54; db -= 3)
         {
             const float y = (float) by + 3.f + (float) (bh - 6) * (float) (-db) / 54.f;
-            g.drawText (String (db), 1103, (int) y - 6, 28, 12, Justification::centredRight, false);
+            if (db % 6 == 0)
+                g.drawText (String (db), 1103, (int) y - 6, 28, 12, Justification::centredRight, false);
+            else
+                g.fillRect (1124.f, y, 5.f, 1.f);
         }
 
         auto fmt = [] (float v) { return v <= -100.f ? String ("-inf") : String (v, 1); };
         struct Row { const char* label; float value; int y; bool hi; };
-        const Row rows[3] = { { "MOMENTARY", mLufs, 474, false }, { "SHORT-TERM", sLufs, 512, false }, { "INTEGRATED", iLufs, 550, true } };
+        const Row rows[3] = { { "MOMENTARY", mLufs, 474 + dy, false }, { "SHORT-TERM", sLufs, 512 + dy, false }, { "INTEGRATED", iLufs, 550 + dy, true } };
         for (auto& r : rows)
         {
             g.setFont (gfx::uiFont (10.f));
@@ -202,8 +247,8 @@ private:
         }
         g.setFont (gfx::uiFont (11.f));
         g.setColour (col::text);
-        g.drawText ("PEAK  " + fmt (peakDbv) + " dBFS", 1114, 594, 148, 14, Justification::centredLeft, false);
-        g.drawText ("RMS  " + fmt (rmsLv) + " / " + fmt (rmsRv), 1114, 609, 148, 14, Justification::centredLeft, false);
+        g.drawText ("PEAK  " + fmt (peakDbv) + " dBFS", 1114, 594 + dy, 148, 14, Justification::centredLeft, false);
+        g.drawText ("RMS  " + fmt (rmsLv) + " / " + fmt (rmsRv), 1114, 609 + dy, 148, 14, Justification::centredLeft, false);
     }
 
     void paintHeader (Graphics& g)
@@ -246,7 +291,7 @@ private:
 
         g.setFont (gfx::uiFont (12.f));
         g.setColour (col::dim);
-        g.drawText ("PARAMETRIC EQ   //   COMPRESSOR   //   BRICKWALL LIMITER", Rectangle<int> (500, 14, 776, 30), Justification::centredRight, false);
+        g.drawText ("EQ   //   COMPRESSOR   //   CLIPPER   //   DUAL LIMITER", Rectangle<int> (600, 14, 676, 30), Justification::centredRight, false);
     }
 
     Knob* addKnob (const char* id, const String& name, bool bipolar = false)
@@ -261,19 +306,25 @@ private:
         constexpr float dt = 1.f / 30.f;
         const float inL = proc.inPeak[0].exchange (0.f),  inR = proc.inPeak[1].exchange (0.f);
         const float oL  = proc.outPeak[0].exchange (0.f), oR  = proc.outPeak[1].exchange (0.f);
-        const float cIn = proc.compInPeak.exchange (0.f);
-        const float cGr = proc.compGrDb.exchange (0.f);
-        const float lGr = proc.limGrDb.exchange (0.f);
+        const float cIn = proc.compInPeak.exchange (0.f),  cGr = proc.compGrDb.exchange (0.f);
+        const float kIn = proc.clipInPeak.exchange (0.f),  kAmt = proc.clipAmountDb.exchange (0.f);
+        const float l1In = proc.lim1InPeak.exchange (0.f), l1Gr = proc.lim1GrDb.exchange (0.f);
+        const float l2In = proc.lim2InPeak.exchange (0.f), l2Gr = proc.lim2GrDb.exchange (0.f);
 
         inMeter.update (inL, inR, dt);
         outMeter.update (oL, oR, dt);
         compGrMeter.update (cGr, 0.f, dt);
-        limGrMeter.update (lGr, 0.f, dt);
+        clipMeter.update (kAmt, 0.f, dt);
+        lim1GrMeter.update (l1Gr, 0.f, dt);
+        lim2GrMeter.update (l2Gr, 0.f, dt);
 
-        const float cInDb = Decibels::gainToDecibels (cIn, -100.f);
-        compCurve.setInputDb (cInDb);
-        compHistory.push (cInDb, cGr);
-        limHistory.push (Decibels::gainToDecibels (jmax (oL, oR), -100.f), lGr);
+        auto db = [] (float lin) { return Decibels::gainToDecibels (lin, -100.f); };
+        compCurve.setInputDb (db (cIn));
+        clipCurve.setInputPeak (kIn);
+        compHistory.push (db (cIn), cGr);
+        clipHistory.push (db (kIn), kAmt);
+        lim1History.push (db (l1In), l1Gr);
+        lim2History.push (db (l2In), l2Gr);
         eqDisplay.tick();
 
         auto& ld = proc.loudness;
@@ -281,20 +332,22 @@ private:
         peakDbv = ld.peakDb.load();  rmsLv = ld.rmsDb[0].load();  rmsRv = ld.rmsDb[1].load();
         loudM.updateDb (mLufs, 0.f, dt);      loudS.updateDb (sLufs, 0.f, dt);
         rmsLMeter.updateDb (rmsLv, 0.f, dt);  rmsRMeter.updateDb (rmsRv, 0.f, dt);
-        repaint (1100, 470, 176, 160);
+        repaint (1100, 470 + dy, 176, 160);
     }
 
     LargartixaProcessor& proc;
     MetalLookAndFeel laf;
     Image texture;
 
-    ToggleButton eqBtn { "EQUALIZER" }, compBtn { "COMPRESSOR" }, limBtn { "LIMITER" };
-    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> eqAtt, compAtt, limAtt;
+    ToggleButton eqBtn { "EQUALIZER" }, compBtn { "COMPRESSOR" }, clipBtn { "CLIPPER" },
+                 lim1Btn { "LIMITER 1" }, lim2Btn { "LIMITER 2" }, tpBtn { "TRUE PEAK" };
+    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> eqAtt, compAtt, clipAtt, lim1Att, lim2Att, tpAtt;
 
     EqDisplay eqDisplay;
     CompCurve compCurve;
-    HistoryDisplay compHistory, limHistory;
-    MeterBar inMeter, outMeter, compGrMeter, limGrMeter;
+    ClipCurve clipCurve;
+    HistoryDisplay compHistory, clipHistory, lim1History, lim2History;
+    MeterBar inMeter, outMeter, compGrMeter, clipMeter, lim1GrMeter, lim2GrMeter;
     MeterBar loudM, loudS, rmsLMeter, rmsRMeter;
     TextButton resetBtn;
     float mLufs = -120.f, sLufs = -120.f, iLufs = -120.f, peakDbv = -120.f, rmsLv = -120.f, rmsRv = -120.f;
@@ -303,9 +356,11 @@ private:
     Knob* hpfKnob = nullptr;
     Knob* bandKnobs[4][3] {};
     Knob* compKnobs[7] {};
-    Knob* limKnobs[3] {};
+    Knob* clipKnobs[4] {};
+    Knob* lim1Knobs[3] {};
+    Knob* lim2Knobs[3] {};
 
-    Rectangle<float> eqPanel, compPanel, limPanel, sidePanel, groupRects[5];
+    Rectangle<float> eqPanel, compPanel, clipPanel, lim1Panel, lim2Panel, sidePanel, groupRects[5];
 };
 
 //==============================================================================
@@ -313,10 +368,11 @@ LargartixaEditor::LargartixaEditor (LargartixaProcessor& p)
     : AudioProcessorEditor (&p), panel (std::make_unique<MainPanel> (p))
 {
     addAndMakeVisible (*panel);
+    const double aspect = (double) MainPanel::H / (double) MainPanel::W;
     setResizable (true, true);
-    setResizeLimits (903, 476, 1935, 1020);
+    setResizeLimits (903, (int) (903.0 * aspect), 1500, (int) (1500.0 * aspect));
     getConstrainer()->setFixedAspectRatio ((double) MainPanel::W / (double) MainPanel::H);
-    setSize (MainPanel::W, MainPanel::H);
+    setSize ((int) (MainPanel::W * 0.9), (int) (MainPanel::H * 0.9));      // tamaño inicial al 90 %
 }
 
 LargartixaEditor::~LargartixaEditor() = default;
