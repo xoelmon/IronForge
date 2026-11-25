@@ -10,6 +10,13 @@ namespace ids
     inline constexpr const char* bandGain[4] = { "b1_gain", "b2_gain", "b3_gain", "b4_gain" };
     inline constexpr const char* bandQ[4]    = { "b1_q",    "b2_q",    "b3_q",    "b4_q"    };
 
+    // Sección dinámica de cada banda
+    inline constexpr const char* bandDyn[4]   = { "b1_dyn",   "b2_dyn",   "b3_dyn",   "b4_dyn"   };
+    inline constexpr const char* bandThr[4]   = { "b1_thr",   "b2_thr",   "b3_thr",   "b4_thr"   };
+    inline constexpr const char* bandRange[4] = { "b1_range", "b2_range", "b3_range", "b4_range" };
+    inline constexpr const char* bandAtk[4]   = { "b1_atk",   "b2_atk",   "b3_atk",   "b4_atk"   };
+    inline constexpr const char* bandRel[4]   = { "b1_rel",   "b2_rel",   "b3_rel",   "b4_rel"   };
+
     inline constexpr const char* cOn      = "c_on";
     inline constexpr const char* cThresh  = "c_thresh";
     inline constexpr const char* cRatio   = "c_ratio";
@@ -18,6 +25,8 @@ namespace ids
     inline constexpr const char* cKnee    = "c_knee";
     inline constexpr const char* cMakeup  = "c_makeup";
     inline constexpr const char* cMix     = "c_mix";
+    inline constexpr const char* cScHp    = "c_schp";
+    inline constexpr const char* cScLp    = "c_sclp";
 
     inline constexpr const char* clipOn    = "clip_on";
     inline constexpr const char* clipDrive = "clip_drive";

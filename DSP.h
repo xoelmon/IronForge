@@ -21,7 +21,7 @@ struct BiquadCoeffs
     double b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
 };
 
-enum class FilterType { LowShelf, Peak, HighShelf, HighPass };
+enum class FilterType { LowShelf, Peak, HighShelf, HighPass, LowPass, BandPass };
 
 inline BiquadCoeffs makeBiquad (FilterType type, double sr, double freq, double gainDb, double q)
 {
@@ -65,6 +65,16 @@ inline BiquadCoeffs makeBiquad (FilterType type, double sr, double freq, double 
             b0 = (1 + cw) * 0.5;  b1 = -(1 + cw);  b2 = (1 + cw) * 0.5;
             a0 = 1 + alpha;       a1 = -2 * cw;    a2 = 1 - alpha;
             break;
+
+        case FilterType::LowPass:
+            b0 = (1 - cw) * 0.5;  b1 = 1 - cw;     b2 = (1 - cw) * 0.5;
+            a0 = 1 + alpha;       a1 = -2 * cw;    a2 = 1 - alpha;
+            break;
+
+        case FilterType::BandPass:                                   // ganancia 0 dB en el centro
+            b0 = alpha;  b1 = 0;  b2 = -alpha;
+            a0 = 1 + alpha;  a1 = -2 * cw;  a2 = 1 - alpha;
+            break;
     }
 
     BiquadCoeffs c;
@@ -101,7 +111,13 @@ struct Biquad
     }
 };
 
-struct EqBandParams { float freq = 1000.f, gainDb = 0.f, q = 1.f; };
+struct EqBandParams
+{
+    float freq = 1000.f, gainDb = 0.f, q = 1.f;
+    // Sección dinámica: la banda mueve su ganancia (gainDb + range * factor) según el nivel de SU frecuencia
+    bool  dynOn = false;
+    float dynThresholdDb = -30.f, dynRangeDb = -6.f, dynAttackMs = 10.f, dynReleaseMs = 120.f;
+};
 
 struct EqParams
 {
@@ -115,8 +131,16 @@ class Equalizer
 public:
     static constexpr FilterType bandType[4] = { FilterType::LowShelf, FilterType::Peak,
                                                 FilterType::Peak,     FilterType::HighShelf };
+    // Filtro que "escucha" cada banda: shelf grave -> paso-bajo, campanas -> paso-banda, shelf agudo -> paso-alto
+    static constexpr FilterType detType[4]  = { FilterType::LowPass, FilterType::BandPass,
+                                                FilterType::BandPass, FilterType::HighPass };
     // El HPF son 2 biquads en cascada (Butterworth de 4º orden = 24 dB/oct)
     static constexpr double hpfQ1 = 0.5412, hpfQ2 = 1.3065;
+    static constexpr float  dynWidthDb = 12.f;      // dB por encima del threshold hasta aplicar todo el range
+    static constexpr int    kSub = 32;              // los coeficientes dinámicos se actualizan cada 32 muestras
+
+    // Cuánto se está moviendo ahora mismo cada banda por la dinámica (dB), para dibujarlo en la pantalla
+    float getDynOffsetDb (int band) const { return dynOffset[band].load(); }
 
     void prepare (double sr, int maxBlock)
     {
@@ -125,15 +149,24 @@ public:
         wetSmooth.reset (sr, 0.015);
         wetSmooth.setCurrentAndTargetValue (1.f);
         for (auto& b : bands) b.reset();
+        for (auto& d : det) d.reset();
         hpf[0].reset(); hpf[1].reset();
+        env.fill (0.f);  fac.fill (0.f);
+        envRel = std::exp (-1.f / (0.02f * (float) sr));
+        for (auto& o : dynOffset) o.store (0.f);
     }
 
     void update (const EqParams& p)
     {
-        for (int i = 0; i < 4; ++i)
-            bands[(size_t) i].c = makeBiquad (bandType[i], sampleRate, p.band[(size_t) i].freq,
-                                              p.band[(size_t) i].gainDb, p.band[(size_t) i].q);
-
+        cur = p;
+        for (size_t i = 0; i < 4; ++i)
+        {
+            const auto& bp = p.band[i];
+            bands[i].c = makeBiquad (bandType[i], sampleRate, bp.freq, bp.gainDb, bp.q);          // estático (las dinámicas lo recalculan)
+            det[i].c   = makeBiquad (detType[i], sampleRate, bp.freq, 0.0, detType[i] == FilterType::BandPass ? (double) bp.q : 0.7071);
+            atkCoef[i] = 1.f - std::exp (-1.f / (juce::jmax (0.05f, bp.dynAttackMs)  * 0.001f * (float) sampleRate));
+            relCoef[i] = 1.f - std::exp (-1.f / (juce::jmax (1.0f,  bp.dynReleaseMs) * 0.001f * (float) sampleRate));
+        }
         hpfActive = p.hpfFreq > 20.5f;
         hpf[0].c = makeBiquad (FilterType::HighPass, sampleRate, p.hpfFreq, 0.0, hpfQ1);
         hpf[1].c = makeBiquad (FilterType::HighPass, sampleRate, p.hpfFreq, 0.0, hpfQ2);
@@ -152,23 +185,31 @@ public:
         for (int ch = 0; ch < 2; ++ch)
             dry.copyFrom (ch, 0, buf, ch, 0, n);
 
-        for (int ch = 0; ch < 2; ++ch)
+        const float* dl = dry.getReadPointer (0);
+        const float* dr = dry.getReadPointer (1);
+        float* l = buf.getWritePointer (0);
+        float* r = buf.getWritePointer (1);
+
+        for (int start = 0; start < n; start += kSub)
         {
-            auto* d = buf.getWritePointer (ch);
-            for (int i = 0; i < n; ++i)
+            const int len = std::min (kSub, n - start);
+
+            for (int b = 0; b < 4; ++b)
+                updateDynamics (b, dl + start, dr + start, len);
+
+            for (int i = start; i < start + len; ++i)
             {
-                float x = d[i];
-                if (hpfActive) { x = hpf[0].process (ch, x); x = hpf[1].process (ch, x); }
-                for (auto& b : bands) x = b.process (ch, x);
-                d[i] = x;
+                float xl = l[i], xr = r[i];
+                if (hpfActive) { xl = hpf[0].process (0, xl); xl = hpf[1].process (0, xl);
+                                 xr = hpf[0].process (1, xr); xr = hpf[1].process (1, xr); }
+                for (auto& b : bands) { xl = b.process (0, xl); xr = b.process (1, xr); }
+                l[i] = xl;  r[i] = xr;
             }
         }
+        for (size_t b = 0; b < 4; ++b)
+            dynOffset[b].store (cur.band[b].dynRangeDb * fac[b]);
 
         // crossfade wet/dry para que el botón ON/OFF no haga "clic"
-        auto* l = buf.getWritePointer (0);
-        auto* r = buf.getWritePointer (1);
-        const auto* dl = dry.getReadPointer (0);
-        const auto* dr = dry.getReadPointer (1);
         for (int i = 0; i < n; ++i)
         {
             const float w = wetSmooth.getNextValue();
@@ -178,9 +219,37 @@ public:
     }
 
 private:
+    // Detector de la banda b sobre la señal de entrada -> factor dinámico 0..1 -> nueva ganancia efectiva de la banda
+    void updateDynamics (int b, const float* dl, const float* dr, int len)
+    {
+        const auto& bp = cur.band[(size_t) b];
+        const size_t ib = (size_t) b;
+        if (! bp.dynOn && fac[ib] < 1.0e-4f) { fac[ib] = 0.f; return; }       // banda estática: coeficientes de update()
+
+        for (int i = 0; i < len; ++i)
+        {
+            float target = 0.f;
+            if (bp.dynOn)
+            {
+                const float a = det[ib].process (0, dl[i]), c = det[ib].process (1, dr[i]);
+                const float rect = std::max (std::abs (a), std::abs (c));
+                env[ib] = rect > env[ib] ? rect : rect + envRel * (env[ib] - rect);
+                const float lvl = 20.f * std::log10 (std::max (env[ib], 1.0e-6f));
+                target = juce::jlimit (0.f, 1.f, (lvl - bp.dynThresholdDb) / dynWidthDb);
+            }
+            fac[ib] += (target - fac[ib]) * (target > fac[ib] ? atkCoef[ib] : relCoef[ib]);
+        }
+        const float eff = bp.gainDb + bp.dynRangeDb * fac[ib];
+        bands[ib].c = makeBiquad (bandType[ib], sampleRate, bp.freq, eff, bp.q);
+    }
+
     double sampleRate = 44100.0;
-    std::array<Biquad, 4> bands;
+    EqParams cur;
+    std::array<Biquad, 4> bands, det;
     std::array<Biquad, 2> hpf;
+    std::array<float, 4> env {}, fac {}, atkCoef {}, relCoef {};
+    float envRel = 0.f;
+    std::atomic<float> dynOffset[4] { 0.f, 0.f, 0.f, 0.f };
     bool hpfActive = false;
     juce::AudioBuffer<float> dry;
     juce::SmoothedValue<float> wetSmooth;
@@ -195,6 +264,7 @@ struct CompParams
     bool  on = true;
     float thresholdDb = -18.f, ratio = 4.f, attackMs = 10.f, releaseMs = 120.f;
     float kneeDb = 6.f, makeupDb = 0.f, mix = 1.f;
+    float scHpHz = 20.f, scLpHz = 20000.f;       // filtros del sidechain (20 Hz / 20 kHz = apagados)
 };
 
 class Compressor
@@ -220,6 +290,7 @@ public:
     {
         sampleRate = sr;
         grState = 0.f;
+        scHp.reset();  scLp.reset();
         makeupSmooth.reset (sr, 0.03);  makeupSmooth.setCurrentAndTargetValue (1.f);
         wetSmooth.reset (sr, 0.03);     wetSmooth.setCurrentAndTargetValue (1.f);
     }
@@ -230,6 +301,9 @@ public:
         atkCoef = std::exp (-1.f / (juce::jmax (0.01f, p.attackMs)  * 0.001f * (float) sampleRate));
         relCoef = std::exp (-1.f / (juce::jmax (0.01f, p.releaseMs) * 0.001f * (float) sampleRate));
         makeupSmooth.setTargetValue (juce::Decibels::decibelsToGain (p.makeupDb));
+        hpOn = p.scHpHz > 20.5f;     lpOn = p.scLpHz < 19900.f;
+        scHp.c = makeBiquad (FilterType::HighPass, sampleRate, p.scHpHz, 0.0, 0.7071);
+        scLp.c = makeBiquad (FilterType::LowPass,  sampleRate, p.scLpHz, 0.0, 0.7071);
         wetSmooth.setTargetValue (p.on ? p.mix : 0.f);
     }
 
@@ -244,7 +318,10 @@ public:
         for (int i = 0; i < n; ++i)
         {
             const float inL = l[i], inR = r[i];
-            const float level   = std::max (std::abs (inL), std::abs (inR));
+            float sl = inL, sr = inR;                           // el detector escucha la señal filtrada
+            if (hpOn) { sl = scHp.process (0, sl);  sr = scHp.process (1, sr); }
+            if (lpOn) { sl = scLp.process (0, sl);  sr = scLp.process (1, sr); }
+            const float level   = std::max (std::abs (sl), std::abs (sr));
             const float levelDb = juce::Decibels::gainToDecibels (level, -100.f);
             const float target  = staticCurveDb (levelDb, params.thresholdDb, params.ratio, params.kneeDb) - levelDb;
 
@@ -267,6 +344,8 @@ private:
     double sampleRate = 44100.0;
     CompParams params;
     float atkCoef = 0.f, relCoef = 0.f, grState = 0.f;
+    Biquad scHp, scLp;
+    bool hpOn = false, lpOn = false;
     juce::SmoothedValue<float> makeupSmooth, wetSmooth;
 };
 

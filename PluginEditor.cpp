@@ -17,7 +17,7 @@ public:
     static constexpr int dy = H - 680;                 // alto extra que gana la columna de sonoridad
 
     explicit MainPanel (LargartixaProcessor& p)
-        : proc (p), eqDisplay (p), compCurve (p.apvts), clipCurve (p.apvts),
+        : proc (p), eqDisplay (p), tabs (p.apvts), compCurve (p.apvts), clipCurve (p.apvts),
           compHistory (24.f), clipHistory (12.f), lim1History (12.f), lim2History (12.f),
           inMeter (2, false, 48.f), outMeter (2, false, 48.f),
           compGrMeter (1, true, 24.f), clipMeter (1, true, 12.f), lim1GrMeter (1, true, 12.f), lim2GrMeter (1, true, 12.f),
@@ -50,20 +50,31 @@ public:
         resetBtn.setButtonText ("RESET");
         resetBtn.onClick = [this] { proc.loudness.requestReset(); };
 
-        // --- EQ ---
+        // --- EQ: HPF + controles de la banda seleccionada (frecuencia/ganancia/Q + sección dinámica) ---
         hpfKnob = addKnob (ids::hpf, "Freq");
-        const char* suffix[3] = { "Freq", "Gain", "Q" };
         for (int b = 0; b < 4; ++b)
         {
-            bandKnobs[b][0] = addKnob (ids::bandFreq[b], suffix[0]);
-            bandKnobs[b][1] = addKnob (ids::bandGain[b], suffix[1], true);
-            bandKnobs[b][2] = addKnob (ids::bandQ[b],    suffix[2]);
+            bandKnobs[b][0] = addKnob (ids::bandFreq[b], "Freq");
+            bandKnobs[b][1] = addKnob (ids::bandGain[b], "Gain", true);
+            bandKnobs[b][2] = addKnob (ids::bandQ[b],    "Q");
+            dynBtn[b].setButtonText ("DYN");
+            addChildComponent (dynBtn[b]);
+            dynAtt[b] = std::make_unique<BA> (p.apvts, ids::bandDyn[b], dynBtn[b]);
+            dynKnobs[b][0] = addKnob (ids::bandThr[b],   "Thresh");
+            dynKnobs[b][1] = addKnob (ids::bandRange[b], "Range", true);
+            dynKnobs[b][2] = addKnob (ids::bandAtk[b],   "Attack");
+            dynKnobs[b][3] = addKnob (ids::bandRel[b],   "Release");
         }
+        addAndMakeVisible (tabs);
+        tabs.onSelect = [this] (int b) { selectBand (b); };
+        eqDisplay.onSelect = [this] (int b) { selectBand (b); };
         // --- Compresor ---
         const std::pair<const char*, const char*> cp[7] = {
             { ids::cThresh, "Thresh" }, { ids::cRatio, "Ratio" }, { ids::cKnee, "Knee" },
             { ids::cAttack, "Attack" }, { ids::cRelease, "Release" }, { ids::cMakeup, "Makeup" }, { ids::cMix, "Mix" } };
         for (int i = 0; i < 7; ++i) compKnobs[i] = addKnob (cp[i].first, cp[i].second);
+        scKnobs[0] = addKnob (ids::cScHp, "HPF", false, 56);       // filtros del sidechain del compresor
+        scKnobs[1] = addKnob (ids::cScLp, "LPF", false, 56);
         // --- Clipper ---
         clipKnobs[0] = addKnob (ids::clipDrive, "Drive");
         clipKnobs[1] = addKnob (ids::clipCeil,  "Ceiling");
@@ -77,6 +88,7 @@ public:
         lim2Knobs[1] = addKnob (ids::l2Ceil,    "Ceiling");
         lim2Knobs[2] = addKnob (ids::l2Release, "Release");
 
+        selectBand (1);
         setSize (W, H);
         startTimerHz (30);
     }
@@ -99,23 +111,33 @@ public:
         inMeter.setBounds (1040, 116, 34, 136);
 
         const int kw = 74;
-        const float gap = (1048.f - 13.f * (float) kw) / 4.f;
+        const float gap = (1048.f - (float) (kw + 148 + 3 * kw + 80 + 4 * kw)) / 3.f;
         float x = 26.f;
         hpfKnob->setBounds ((int) x, 268, kw, 90);
         groupRects[0] = { x, 255.f, (float) kw, 13.f };
         x += (float) kw + gap;
+        tabs.setBounds ((int) x, 292, 148, 40);
+        groupRects[1] = { x, 255.f, 148.f, 13.f };
+        x += 148.f + gap;
+        groupRects[2] = { x, 255.f, 3.f * (float) kw, 13.f };
         for (int b = 0; b < 4; ++b)
-        {
-            groupRects[b + 1] = { x, 255.f, 3.f * (float) kw, 13.f };
             for (int k = 0; k < 3; ++k)
                 bandKnobs[b][k]->setBounds ((int) x + k * kw, 268, kw, 90);
-            x += 3.f * (float) kw + gap;
+        x += 3.f * (float) kw + gap;
+        groupRects[3] = { x, 255.f, (float) (80 + 4 * kw), 13.f };
+        for (int b = 0; b < 4; ++b)
+        {
+            dynBtn[b].setBounds ((int) x, 300, 76, 26);
+            for (int k = 0; k < 4; ++k)
+                dynKnobs[b][k]->setBounds ((int) x + 80 + k * kw, 268, kw, 90);
         }
 
         // ---- Compresor ----
         compBtn.setBounds (28, 384, 220, 26);
         compCurve.setBounds (26, 416, 132, 132);
-        compHistory.setBounds (166, 416, 327, 132);
+        compHistory.setBounds (166, 416, 207, 132);
+        scKnobs[0]->setBounds (381, 436, 56, 84);
+        scKnobs[1]->setBounds (437, 436, 56, 84);
         compGrMeter.setBounds (503, 430, 30, 118);
         const float cw = 507.f / 7.f;
         for (int i = 0; i < 7; ++i)
@@ -168,9 +190,10 @@ public:
         paintLoudness (g);
 
         // títulos de grupo del EQ
-        const char* names[5] = { "HIGH-PASS", "LOW SHELF", "LOW-MID BELL", "HIGH-MID BELL", "HIGH SHELF" };
+        const char* bandNames[4] = { "LOW SHELF", "LOW-MID BELL", "HIGH-MID BELL", "HIGH SHELF" };
+        const String names[4] = { "HIGH-PASS", "BAND SELECT", "BAND " + String (selBand + 1) + "  -  " + bandNames[selBand], "DYNAMIC EQ" };
         g.setFont (gfx::uiFont (10.f));
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < 4; ++i)
         {
             const auto r = groupRects[i];
             g.setColour (col::dim);
@@ -195,6 +218,9 @@ public:
         g.setColour (col::dim);
         g.setFont (gfx::uiFont (11.f));
         g.drawText ("4x OVERSAMPLING", 800, 384, 264, 26, Justification::centredRight, false);
+        g.setColour (col::steelHi);
+        g.setFont (gfx::uiFont (10.f));
+        g.drawText ("SIDECHAIN", 381, 420, 112, 12, Justification::centred, false);
         g.drawFittedText ("BRICKWALL\nLOOKAHEAD  5 ms\nSTEREO LINKED", Rectangle<int> (331, 826, 202, 60), Justification::topRight, 4);
 
         const int lat = proc.getLatencySamples();
@@ -294,9 +320,24 @@ private:
         g.drawText ("EQ   //   COMPRESSOR   //   CLIPPER   //   DUAL LIMITER", Rectangle<int> (600, 14, 676, 30), Justification::centredRight, false);
     }
 
-    Knob* addKnob (const char* id, const String& name, bool bipolar = false)
+    void selectBand (int b)
     {
-        knobs.push_back (std::make_unique<Knob> (proc.apvts, id, name, bipolar));
+        selBand = jlimit (0, 3, b);
+        for (int i = 0; i < 4; ++i)
+        {
+            const bool v = (i == selBand);
+            for (auto* k : bandKnobs[i]) k->setVisible (v);
+            for (auto* k : dynKnobs[i])  k->setVisible (v);
+            dynBtn[i].setVisible (v);
+        }
+        tabs.setSelected (selBand);
+        eqDisplay.setSelected (selBand);
+        repaint (14, 250, 1072, 20);
+    }
+
+    Knob* addKnob (const char* id, const String& name, bool bipolar = false, int textW = 64)
+    {
+        knobs.push_back (std::make_unique<Knob> (proc.apvts, id, name, bipolar, textW));
         addAndMakeVisible (*knobs.back());
         return knobs.back().get();
     }
@@ -326,6 +367,7 @@ private:
         lim1History.push (db (l1In), l1Gr);
         lim2History.push (db (l2In), l2Gr);
         eqDisplay.tick();
+        tabs.repaint();
 
         auto& ld = proc.loudness;
         mLufs = ld.momentary.load();  sLufs = ld.shortTerm.load();  iLufs = ld.integrated.load();
@@ -344,6 +386,7 @@ private:
     std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> eqAtt, compAtt, clipAtt, lim1Att, lim2Att, tpAtt;
 
     EqDisplay eqDisplay;
+    BandTabs tabs;
     CompCurve compCurve;
     ClipCurve clipCurve;
     HistoryDisplay compHistory, clipHistory, lim1History, lim2History;
@@ -355,12 +398,17 @@ private:
     std::vector<std::unique_ptr<Knob>> knobs;
     Knob* hpfKnob = nullptr;
     Knob* bandKnobs[4][3] {};
+    Knob* dynKnobs[4][4] {};
+    Knob* scKnobs[2] {};
+    ToggleButton dynBtn[4];
+    std::unique_ptr<AudioProcessorValueTreeState::ButtonAttachment> dynAtt[4];
+    int selBand = 1;
     Knob* compKnobs[7] {};
     Knob* clipKnobs[4] {};
     Knob* lim1Knobs[3] {};
     Knob* lim2Knobs[3] {};
 
-    Rectangle<float> eqPanel, compPanel, clipPanel, lim1Panel, lim2Panel, sidePanel, groupRects[5];
+    Rectangle<float> eqPanel, compPanel, clipPanel, lim1Panel, lim2Panel, sidePanel, groupRects[4];
 };
 
 //==============================================================================

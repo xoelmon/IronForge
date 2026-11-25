@@ -41,6 +41,7 @@ public:
     // --- Datos para los medidores (el audio los escribe, la interfaz los lee y los pone a 0) ---
     std::atomic<float> inPeak[2]  { 0.f, 0.f };   // lineal
     std::atomic<float> outPeak[2] { 0.f, 0.f };   // lineal
+    std::atomic<float> eqDynOffset[4] { 0.f, 0.f, 0.f, 0.f };   // dB que mueve la dinámica de cada banda del EQ
     std::atomic<float> compInPeak { 0.f };        // lineal (entrada del compresor)
     std::atomic<float> compGrDb   { 0.f };        // dB de reducción (positivo)
     std::atomic<float> clipInPeak { 0.f };        // lineal (entrada del clipper)

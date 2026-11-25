@@ -261,10 +261,10 @@ public:
 class Knob : public juce::Component
 {
 public:
-    Knob (juce::AudioProcessorValueTreeState& apvts, const char* paramId, const juce::String& name, bool bipolar = false)
+    Knob (juce::AudioProcessorValueTreeState& apvts, const char* paramId, const juce::String& name, bool bipolar = false, int textWidth = 64)
     {
         slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
-        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 64, 16);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textWidth, 16);
         slider.setRotaryParameters (juce::MathConstants<float>::pi * 1.25f, juce::MathConstants<float>::pi * 2.75f, true);
         slider.setMouseDragSensitivity (220);
         slider.getProperties().set ("bipolar", bipolar);
@@ -577,6 +577,58 @@ private:
 };
 
 //==============================================================================
+//  Pestañas 1-4 para elegir la banda del EQ cuyos controles se muestran (punto naranja = banda dinámica)
+//==============================================================================
+class BandTabs : public juce::Component
+{
+public:
+    explicit BandTabs (juce::AudioProcessorValueTreeState& a) : apvts (a) {}
+
+    std::function<void (int)> onSelect;
+    void setSelected (int b) { sel = b; repaint(); }
+
+    void paint (juce::Graphics& g) override
+    {
+        using namespace juce;
+        for (int i = 0; i < 4; ++i)
+        {
+            const auto r = tabRect (i);
+            const bool s = (i == sel);
+            const bool dyn = apvts.getRawParameterValue (ids::bandDyn[i])->load() > 0.5f;
+            if (s)
+            {
+                g.setColour (col::glow.withAlpha (0.25f));
+                g.fillRoundedRectangle (r.expanded (3.f), 6.f);
+            }
+            g.setGradientFill (ColourGradient (s ? Colour (0xff4a1616) : Colour (0xff2e3035), 0.f, r.getY(),
+                                               s ? Colour (0xff1a0a0a) : Colour (0xff131315), 0.f, r.getBottom(), false));
+            g.fillRoundedRectangle (r, 4.f);
+            g.setColour (s ? col::glow : Colour (0xff050506));
+            g.drawRoundedRectangle (r, 4.f, s ? 1.8f : 1.5f);
+            g.setColour (s ? col::bone : col::dim);
+            g.setFont (gfx::titleFont (20.f));
+            g.drawText (String (i + 1), r, Justification::centred, false);
+            if (dyn)
+            {
+                g.setColour (col::ember);
+                g.fillEllipse (r.getRight() - 10.f, r.getY() + 4.f, 6.f, 6.f);
+            }
+        }
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        for (int i = 0; i < 4; ++i)
+            if (tabRect (i).contains (e.position)) { sel = i; if (onSelect) onSelect (i); repaint(); return; }
+    }
+
+private:
+    juce::Rectangle<float> tabRect (int i) const { return { (float) i * 38.f, 0.f, 34.f, (float) getHeight() }; }
+    juce::AudioProcessorValueTreeState& apvts;
+    int sel = 1;
+};
+
+//==============================================================================
 //  Pantalla del EQ: analizador de espectro + curva de respuesta + nodos arrastrables
 //    arrastrar nodo = frecuencia/ganancia · rueda = Q · doble clic = ganancia a 0
 //==============================================================================
@@ -590,6 +642,9 @@ public:
         spectrum.fill (-120.f);
         rolling.fill (0.f);
     }
+
+    std::function<void (int)> onSelect;
+    void setSelected (int b) { selected = b; repaint(); }
 
     //-------------------------------------------------------------- análisis
     void tick()
@@ -672,7 +727,7 @@ public:
         {
             std::array<ifg::BiquadCoeffs, 4> bc;
             for (size_t i = 0; i < 4; ++i)
-                bc[i] = ifg::makeBiquad (ifg::Equalizer::bandType[i], sr, val (ids::bandFreq[i]), val (ids::bandGain[i]), val (ids::bandQ[i]));
+                bc[i] = ifg::makeBiquad (ifg::Equalizer::bandType[i], sr, val (ids::bandFreq[i]), effGain ((int) i), val (ids::bandQ[i]));
             const bool hpfOn = val (ids::hpf) > 20.5f;
             const auto h1 = ifg::makeBiquad (ifg::FilterType::HighPass, sr, val (ids::hpf), 0.0, ifg::Equalizer::hpfQ1);
             const auto h2 = ifg::makeBiquad (ifg::FilterType::HighPass, sr, val (ids::hpf), 0.0, ifg::Equalizer::hpfQ2);
@@ -708,6 +763,18 @@ public:
         {
             const auto c = nodePos (i, r);
             const bool active = (i == dragging) || (dragging < 0 && i == hover);
+            if (val (ids::bandDyn[i]) > 0.5f)                                    // marcador: dónde está la banda ahora mismo
+            {
+                const Point<float> e (c.x, dbToY (effGain (i), r));
+                g.setColour (col::ember.withAlpha (0.85f));
+                g.drawLine (c.x, c.y, e.x, e.y, 1.6f);
+                g.fillEllipse (e.x - 3.5f, e.y - 3.5f, 7.f, 7.f);
+            }
+            if (i == selected)
+            {
+                g.setColour (col::bone.withAlpha (0.9f));
+                g.drawEllipse (c.x - 13.f, c.y - 13.f, 26.f, 26.f, 1.5f);
+            }
             const float rad = active ? 10.f : 8.f;
             g.setColour (col::glow.withAlpha (active ? 0.5f : 0.22f));
             g.fillEllipse (c.x - rad - 5.f, c.y - rad - 5.f, (rad + 5.f) * 2.f, (rad + 5.f) * 2.f);
@@ -756,6 +823,8 @@ public:
         dragging = nodeAt (e.position);
         if (dragging >= 0)
         {
+            selected = dragging;
+            if (onSelect) onSelect (dragging);
             gesture (ids::bandFreq[dragging], true);
             gesture (ids::bandGain[dragging], true);
         }
@@ -816,6 +885,7 @@ private:
     static float yToDb (float y, juce::Rectangle<float> r)   { return (r.getCentreY() - y) / r.getHeight() * 2.f * dbRange; }
 
     float val (const char* id) const { return apvts.getRawParameterValue (id)->load(); }
+    float effGain (int i) const { return val (ids::bandGain[i]) + (val (ids::bandDyn[i]) > 0.5f ? proc.eqDynOffset[i].load() : 0.f); }
 
     void setParam (const char* id, float v)
     {
@@ -857,5 +927,5 @@ private:
     std::array<float, fftSize> rolling {};
     std::array<float, fftSize * 2> fftData {};
     std::array<float, fftSize / 2 + 1> spectrum {};
-    int wp = 0, hover = -1, dragging = -1;
+    int wp = 0, hover = -1, dragging = -1, selected = 1;
 };

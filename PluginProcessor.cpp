@@ -13,6 +13,7 @@ static String fmtQ (float v, int)     { return String (v, 2); }
 static String fmtPct (float v, int)   { return String ((int) std::round (v)) + " %"; }
 static String fmtHz (float v, int)    { return v >= 1000.f ? String (v / 1000.f, v >= 10000.f ? 1 : 2) + " kHz" : String (v, v < 100.f ? 1 : 0) + " Hz"; }
 static String fmtHpf (float v, int)   { return v <= 20.5f ? String ("OFF") : fmtHz (v, 0); }
+static String fmtLpf (float v, int)   { return v >= 19900.f ? String ("OFF") : fmtHz (v, 0); }
 
 static float parseNumber (const String& t)
 {
@@ -70,6 +71,13 @@ AudioProcessorValueTreeState::ParameterLayout LargartixaProcessor::createParamet
         addFloat (ids::bandFreq[i], n + " Freq", rangeWithCentre (fLo[i], fHi[i], fCen[i]), fDef[i], fmtHz, parseHz);
         addFloat (ids::bandGain[i], n + " Gain", NormalisableRange<float> (-18.f, 18.f, 0.1f), 0.f, fmtDb, parseNumber);
         addFloat (ids::bandQ[i],    n + " Q",    rangeWithCentre (qLo[i], qHi[i], 1.0f), qDef[i], fmtQ, parseNumber);
+
+        // Sección dinámica: Range negativo = reduce al superar el threshold (de-esser, anti-resonancia), positivo = realza
+        addBool (ids::bandDyn[i], n + " Dynamic", false);
+        addFloat (ids::bandThr[i],   n + " Dyn Threshold", NormalisableRange<float> (-60.f, 0.f, 0.1f), -30.f, fmtDb, parseNumber);
+        addFloat (ids::bandRange[i], n + " Dyn Range",     NormalisableRange<float> (-18.f, 18.f, 0.1f), -6.f, fmtDb, parseNumber);
+        addFloat (ids::bandAtk[i],   n + " Dyn Attack",    rangeWithCentre (0.1f, 200.f, 10.f), 10.f, fmtMs, parseNumber);
+        addFloat (ids::bandRel[i],   n + " Dyn Release",   rangeWithCentre (10.f, 1000.f, 120.f), 120.f, fmtMs, parseNumber);
     }
 
     // ---------------- Compresor ----------------
@@ -81,6 +89,8 @@ AudioProcessorValueTreeState::ParameterLayout LargartixaProcessor::createParamet
     addFloat (ids::cKnee,    "Comp Knee",      NormalisableRange<float> (0.f, 24.f, 0.1f), 6.f, fmtDb, parseNumber);
     addFloat (ids::cMakeup,  "Comp Makeup",    NormalisableRange<float> (0.f, 24.f, 0.1f), 0.f, fmtDb, parseNumber);
     addFloat (ids::cMix,     "Comp Mix",       NormalisableRange<float> (0.f, 100.f, 1.f), 100.f, fmtPct, parseNumber);
+    addFloat (ids::cScHp, "Comp Sidechain HPF", rangeWithCentre (20.f, 1000.f, 120.f), 20.f, fmtHpf, parseHz);
+    addFloat (ids::cScLp, "Comp Sidechain LPF", rangeWithCentre (1000.f, 20000.f, 6000.f), 20000.f, fmtLpf, parseHz);
 
     // ---------------- Clipper ----------------
     addBool (ids::clipOn, "Clipper On", true);
@@ -150,9 +160,12 @@ void LargartixaProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     ep.on = on (ids::eqOn);
     ep.hpfFreq = get (ids::hpf);
     for (size_t i = 0; i < 4; ++i)
-        ep.band[i] = { get (ids::bandFreq[i]), get (ids::bandGain[i]), get (ids::bandQ[i]) };
+        ep.band[i] = { get (ids::bandFreq[i]), get (ids::bandGain[i]), get (ids::bandQ[i]),
+                       on (ids::bandDyn[i]), get (ids::bandThr[i]), get (ids::bandRange[i]), get (ids::bandAtk[i]), get (ids::bandRel[i]) };
     eq.update (ep);
     eq.process (buffer);
+    for (int i = 0; i < 4; ++i)
+        eqDynOffset[i].store (eq.getDynOffsetDb (i));
 
     storeMax (compInPeak, jmax (buffer.getMagnitude (0, 0, n), buffer.getMagnitude (1, 0, n)));
 
@@ -163,6 +176,7 @@ void LargartixaProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     cp.attackMs    = get (ids::cAttack);   cp.releaseMs = get (ids::cRelease);
     cp.kneeDb      = get (ids::cKnee);     cp.makeupDb  = get (ids::cMakeup);
     cp.mix         = get (ids::cMix) * 0.01f;
+    cp.scHpHz      = get (ids::cScHp);     cp.scLpHz    = get (ids::cScLp);
     comp.update (cp);
     storeMax (compGrDb, comp.process (buffer));
 
